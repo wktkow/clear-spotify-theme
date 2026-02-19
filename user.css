@@ -1520,24 +1520,54 @@ aside[aria-label="Now playing bar"] {
 .Root__top-container .Root__right-sidebar {
   grid-area: left-sidebar !important;
 }
-.Root__top-container .Root__nav-bar .os-scrollbar,
+
+/* Hide all resize bars on library and queue sidebars */
 .Root__top-container .Root__nav-bar .LayoutResizer__resize-bar,
-.WBFaUw_oOfN2m4aTxggt .os-scrollbar,
-.WBFaUw_oOfN2m4aTxggt .LayoutResizer__resize-bar {
+.WBFaUw_oOfN2m4aTxggt .LayoutResizer__resize-bar,
+.Root__top-container .Root__right-sidebar .LayoutResizer__resize-bar {
+  display: none !important;
+}
+
+/* Fix scrollbar positions for swapped sidebars */
+.Root__top-container .Root__nav-bar .os-scrollbar,
+.WBFaUw_oOfN2m4aTxggt .os-scrollbar {
   left: -4px !important;
   right: auto !important;
 }
-.Root__top-container .Root__right-sidebar .os-scrollbar,
-.Root__top-container .Root__right-sidebar .LayoutResizer__resize-bar {
+.Root__top-container .Root__right-sidebar .os-scrollbar {
   right: -4px !important;
   left: auto !important;
 }
-.Root__top-container .Root__nav-bar .LayoutResizer__resize-bar,
-.WBFaUw_oOfN2m4aTxggt .LayoutResizer__resize-bar {
-  transform: scaleX(-1);
-}
-.Root__top-container .Root__right-sidebar .LayoutResizer__resize-bar {
-  transform: scaleX(-1);
+
+/* Fixed 380px width for the queue sidebar on desktop, collapse when empty */
+@media (min-width: 900px) {
+  .Root__top-container .Root__right-sidebar:has(aside) {
+    width: 380px !important;
+    min-width: 380px !important;
+    max-width: 380px !important;
+  }
+  .Root__top-container .Root__right-sidebar:not(:has(aside)) {
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    overflow: hidden !important;
+    border: none !important;
+    padding: 0 !important;
+  }
+  /* Force inner panels to fill the full 380px */
+  .Root__top-container .Root__right-sidebar > div {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .Root__top-container .Root__right-sidebar aside {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  .Root__top-container .Root__right-sidebar {
+    --right-sidebar-width: 380px !important;
+    --panel-width: 380px !important;
+  }
 }
 
 /* --- Snippet: Thin Library Sidebar Rows --- */
