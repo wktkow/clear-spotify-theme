@@ -1348,6 +1348,128 @@ button.main-playPauseButton-button {
   white-space: nowrap;
 }
 
+/* --- Clear Settings Modal --- */
+.clear-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.15s ease,
+    visibility 0.15s;
+}
+
+.clear-settings-overlay--open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.clear-settings-modal {
+  width: 22rem;
+  max-height: 80vh;
+  overflow-y: auto;
+  background-color: var(--spice-main);
+  border: var(--default-border);
+  border-radius: var(--border-radius-md);
+  padding: 1.25rem;
+  transform: translateY(8px) scale(0.97);
+  transition: transform 0.15s ease;
+}
+
+.clear-settings-overlay--open .clear-settings-modal {
+  transform: translateY(0) scale(1);
+}
+
+.clear-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.clear-settings-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--spice-text);
+}
+
+.clear-settings-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: none;
+  border-radius: var(--border-radius-md);
+  background: none;
+  color: var(--spice-subtext);
+  cursor: pointer;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
+}
+
+.clear-settings-close:hover {
+  background-color: var(--spice-button-hover);
+  color: var(--spice-text);
+}
+
+.clear-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.625rem 0;
+  border-top: var(--default-border);
+}
+
+.clear-settings-row-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--spice-text);
+}
+
+.clear-settings-row-desc {
+  font-size: 0.6875rem;
+  color: var(--spice-subtext);
+  margin-top: 0.125rem;
+}
+
+.clear-settings-toggle {
+  position: relative;
+  width: 2.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  background-color: var(--spice-button-hover);
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease;
+}
+
+.clear-settings-toggle--on {
+  background-color: var(--spice-accent, #1db954);
+}
+
+.clear-settings-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 9999px;
+  background-color: var(--spice-text);
+  transition: transform 0.15s ease;
+}
+
+.clear-settings-toggle--on .clear-settings-toggle-knob {
+  transform: translateX(1rem);
+}
+
 .Root__now-playing-bar {
   transform: translateY(16px);
 }
@@ -1447,17 +1569,17 @@ aside[aria-label="Now playing bar"] {
   display: none !important;
 }
 
-/* --- Snippet: Thicker Bars --- */
-.x-progressBar-progressBarBg {
+/* --- Snippet: Thicker Bars (toggled via Clear Settings) --- */
+body.clear-thick-bars .x-progressBar-progressBarBg {
   height: 100% !important;
 }
-.x-progressBar-sliderArea {
+body.clear-thick-bars .x-progressBar-sliderArea {
   height: 100% !important;
 }
-.x-progressBar-sliderArea * {
+body.clear-thick-bars .x-progressBar-sliderArea * {
   height: 100% !important;
 }
-.x-progressBar-fillColor {
+body.clear-thick-bars .x-progressBar-fillColor {
   height: 100% !important;
 }
 
