@@ -668,8 +668,9 @@ input:hover:not([disabled], :active) ~ .x-toggle-indicatorWrapper,
     var(--background-noise);
 }
 
-.main-actionBarBackground-background {
-  background: transparent !important;
+.main-actionBarBackground-background,
+[class*="actionBarBackground-background"] {
+  display: none !important;
 }
 
 .main-entityHeader-container.main-entityHeader-withBackgroundImage {
