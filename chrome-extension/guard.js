@@ -16,21 +16,160 @@
 
   /* ── CSS injection ────────────────────────────────────────────────── */
 
-  function injectThemeCSS() {
-    // CSS is embedded at build time in css-data.js (runs before this file).
-    // No fetch, no network, no WAR – just instant injection.
-    //
-    // We use document.adoptedStyleSheets instead of <style> elements.
-    // Adopted stylesheets are spec-guaranteed to come AFTER all <link> and
-    // <style> elements in the cascade, so our rules always win at equal
-    // specificity — no DOM re-ordering or MutationObservers needed.
-    const cssData = window.__clearThemeCSS || {};
+  const TAG = "[Clear Theme]";
 
+  function log(...args) {
+    console.log(TAG, ...args);
+  }
+
+  function warn(...args) {
+    console.warn(TAG, ...args);
+  }
+
+  /**
+   * Create <style> elements from the embedded CSS data and append them to
+   * the given target (document.head or document.documentElement).
+   * Returns the array of created <style> nodes.
+   */
+  function createStyleElements(cssData, target) {
+    const styles = [];
     for (const [name, css] of Object.entries(cssData)) {
-      const sheet = new CSSStyleSheet();
-      sheet.replaceSync(css);
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      const style = document.createElement("style");
+      style.setAttribute("data-clear-theme", name);
+      style.textContent = css;
+      target.appendChild(style);
+      styles.push(style);
+      log(`Injected <style data-clear-theme="${name}"> (${css.length} chars) → ${target.nodeName}`);
     }
+    return styles;
+  }
+
+  /**
+   * Move our <style> tags to the very end of <head> so they come AFTER
+   * all of Spotify's <link> stylesheets in the cascade.
+   */
+  function promoteStyles() {
+    const head = document.head;
+    if (!head) {
+      warn("promoteStyles: <head> not available yet");
+      return;
+    }
+    const ours = head.querySelectorAll("style[data-clear-theme]");
+    if (ours.length === 0) {
+      warn("promoteStyles: no style[data-clear-theme] found in <head>!");
+      return;
+    }
+    // Check if they're already last
+    const allChildren = [...head.children];
+    const lastChild = allChildren[allChildren.length - 1];
+    if (lastChild && lastChild.hasAttribute && lastChild.hasAttribute("data-clear-theme")) {
+      return; // already at the end
+    }
+    ours.forEach((s) => head.appendChild(s));
+    log(`promoteStyles: moved ${ours.length} style(s) to end of <head> (${head.children.length} children total)`);
+  }
+
+  function injectThemeCSS() {
+    const cssData = window.__clearThemeCSS;
+    log("injectThemeCSS called");
+    log("  window.__clearThemeCSS exists:", !!cssData);
+    log("  typeof:", typeof cssData);
+
+    if (!cssData || typeof cssData !== "object") {
+      warn("CSS data missing! css-data.js may not have run before guard.js");
+      return;
+    }
+
+    const keys = Object.keys(cssData);
+    log("  keys:", keys.join(", "));
+    for (const k of keys) {
+      log(`  ${k}: ${cssData[k].length} chars, starts with: "${cssData[k].substring(0, 60)}..."`);
+    }
+
+    // Phase 1: Inject immediately into whatever target is available
+    const target = document.head || document.documentElement;
+    log("Phase 1: immediate inject →", target.nodeName);
+    createStyleElements(cssData, target);
+
+    // Phase 2: On DOMContentLoaded, ensure styles are in <head> at the end
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => {
+        log("Phase 2: DOMContentLoaded fired, readyState =", document.readyState);
+
+        // If we injected into <html> before <head> existed, move to <head>
+        const orphans = document.documentElement.querySelectorAll(
+          ":scope > style[data-clear-theme]"
+        );
+        if (orphans.length > 0 && document.head) {
+          log(`  Moving ${orphans.length} orphan style(s) from <html> to <head>`);
+          orphans.forEach((s) => document.head.appendChild(s));
+        }
+
+        promoteStyles();
+      }, { once: true });
+    } else {
+      log("Phase 2: already past loading, promoting now");
+      promoteStyles();
+    }
+
+    // Phase 3: After window load, promote again (Spotify lazy-loads CSS)
+    window.addEventListener("load", () => {
+      log("Phase 3: window.load fired");
+      promoteStyles();
+    }, { once: true });
+
+    // Phase 4: Periodic promotion at 2s, 5s, 10s to catch late-loaded CSS
+    for (const delay of [2000, 5000, 10000]) {
+      setTimeout(() => {
+        log(`Phase 4: ${delay}ms timer fired`);
+        promoteStyles();
+
+        // Verify our styles are actually in the DOM
+        const found = document.querySelectorAll("style[data-clear-theme]");
+        log(`  Found ${found.length} style[data-clear-theme] in DOM`);
+        found.forEach((s) => {
+          log(`    ${s.getAttribute("data-clear-theme")}: ${s.textContent.length} chars, parent: ${s.parentNode?.nodeName}`);
+        });
+
+        // Nuclear: if styles are somehow gone, re-inject
+        if (found.length === 0) {
+          warn(`  STYLES DISAPPEARED! Re-injecting from cssData`);
+          createStyleElements(cssData, document.head || document.documentElement);
+          promoteStyles();
+        }
+      }, delay);
+    }
+
+    // Phase 5: MutationObserver — whenever Spotify adds a new <link>, re-promote
+    function watchHead() {
+      const head = document.head;
+      if (!head) {
+        log("Phase 5: <head> not ready, waiting...");
+        const obs = new MutationObserver(() => {
+          if (document.head) {
+            obs.disconnect();
+            watchHead();
+          }
+        });
+        obs.observe(document.documentElement, { childList: true });
+        return;
+      }
+      log("Phase 5: watching <head> for new stylesheets");
+      new MutationObserver((mutations) => {
+        const hasNewSheet = mutations.some((m) =>
+          [...m.addedNodes].some(
+            (n) => n.nodeName === "LINK" && (n.rel === "stylesheet" || n.type === "text/css"),
+          ),
+        );
+        if (hasNewSheet) {
+          log("Phase 5: new <link> stylesheet detected, promoting");
+          promoteStyles();
+        }
+      }).observe(head, { childList: true });
+    }
+    watchHead();
+
+    log("injectThemeCSS complete — all phases scheduled");
   }
 
   /* ── Disabled state ───────────────────────────────────────────────── */
