@@ -1,5 +1,8 @@
 (async () => {
-  // Early splash disable – hide overlay before Spicetify even loads
+  // Chrome extension guard – exit if disabled by login guard
+  if (window.__clearExtensionDisabled) return;
+
+  // Early splash disable – hide overlay before UI even loads
   try {
     const earlySettings = JSON.parse(
       localStorage.getItem("clear-theme-settings") || "{}",
@@ -9,12 +12,83 @@
     }
   } catch {}
 
-  while (!Spicetify?.React || !Spicetify?.ReactDOM || !Spicetify?.Platform) {
+  // Wait for Spotify UI to be ready (works with and without Spicetify)
+  while (!document.querySelector(".Root__main-view")) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
+  // --- DOM-based player helpers (no Spicetify dependency) ---
+  function isPlaying() {
+    const btn = document.querySelector(
+      '[data-testid="control-button-playpause"]',
+    );
+    return btn?.getAttribute("aria-label") === "Pause";
+  }
+
+  function onPlayPauseChange(callback) {
+    function attach() {
+      const btn = document.querySelector(
+        '[data-testid="control-button-playpause"]',
+      );
+      if (!btn) return false;
+      new MutationObserver(() => callback()).observe(btn, {
+        attributes: true,
+        attributeFilter: ["aria-label"],
+      });
+      return true;
+    }
+    if (!attach()) {
+      const retry = new MutationObserver(() => {
+        if (attach()) retry.disconnect();
+      });
+      retry.observe(document.body, { childList: true, subtree: true });
+    }
+  }
+
+  function onSongChange(callback) {
+    let lastTrack = "";
+    function check() {
+      const el =
+        document.querySelector('[data-testid="context-item-info-title"]') ||
+        document.querySelector(".main-trackInfo-name");
+      const title = el?.textContent || "";
+      if (title && title !== lastTrack) {
+        lastTrack = title;
+        callback();
+      }
+    }
+    function attach() {
+      const bar = document.querySelector(
+        '.Root__now-playing-bar, [data-testid="now-playing-bar"]',
+      );
+      if (!bar) return false;
+      new MutationObserver(() => check()).observe(bar, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+      return true;
+    }
+    if (!attach()) {
+      const retry = new MutationObserver(() => {
+        if (attach()) retry.disconnect();
+      });
+      retry.observe(document.body, { childList: true, subtree: true });
+    }
+  }
+
+  function getUsername() {
+    const link = document.querySelector(
+      '[data-testid="user-widget-link"], .main-userWidget-box a[href*="/user/"]',
+    );
+    if (link) {
+      const match = link.getAttribute("href")?.match(/\/user\/([^/?#]+)/);
+      if (match) return match[1];
+    }
+    return null;
+  }
+
   const isGlobalNav = !!(
-    Spicetify.Platform.version >= "1.2.46" ||
     document.querySelector(".globalNav") ||
     document.querySelector(".Root__globalNav") ||
     document.getElementById("global-nav-bar") ||
@@ -114,7 +188,7 @@
     tryCloseOnStartup(10);
 
     // Open now playing view on each track change
-    Spicetify.Player.addEventListener("songchange", () => {
+    onSongChange(() => {
       const settings = loadSettings();
       if (settings.autoNowPlaying === false) return;
       setTimeout(() => {
@@ -125,11 +199,11 @@
     });
 
     // Open now playing view when playback starts
-    Spicetify.Player.addEventListener("onplaypause", () => {
+    onPlayPauseChange(() => {
       const settings = loadSettings();
       if (settings.autoNowPlaying === false) return;
       setTimeout(() => {
-        if (Spicetify.Player.isPlaying()) {
+        if (isPlaying()) {
           if (!isNowPlayingOpen()) {
             clickNowPlayingButton();
           }
@@ -146,13 +220,10 @@
 
   // --- Pause state class on body ---
   function updatePausedState() {
-    document.body.classList.toggle(
-      "clear-paused",
-      !Spicetify.Player.isPlaying(),
-    );
+    document.body.classList.toggle("clear-paused", !isPlaying());
   }
   updatePausedState();
-  Spicetify.Player.addEventListener("onplaypause", updatePausedState);
+  onPlayPauseChange(updatePausedState);
 
   function openSettingsModal() {
     // Don't double-create
@@ -316,17 +387,17 @@
       {
         label: "Marketplace",
         icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75zm0 5a.75.75 0 0 1 .75-.75h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1-.75-.75z"/></svg>`,
-        action: () => Spicetify.Platform.History.push("/marketplace"),
+        action: () => {
+          window.location.href = "/marketplace";
+        },
       },
       {
         label: "Profile",
         icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM3.5 4.5a4.5 4.5 0 1 1 9 0 4.5 4.5 0 0 1-9 0zM8 10c-3.037 0-5.5 1.343-5.5 3v1.5h11V13c0-1.657-2.463-3-5.5-3zm-7 3c0-2.761 3.134-4.5 7-4.5s7 1.739 7 4.5v2a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5v-2z"/></svg>`,
         action: () => {
-          const username =
-            Spicetify.Platform.UserAPI?._product_state?.username ||
-            Spicetify.Platform.username;
+          const username = getUsername();
           if (username) {
-            Spicetify.Platform.History.push(`/user/${username}`);
+            window.location.href = `/user/${username}`;
           }
         },
       },
