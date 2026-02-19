@@ -606,7 +606,10 @@
 
   // --- Fade out startup splash (wait for full page load + images) ---
   // Splash is desktop-only; Chrome extension sets __clearExtensionNoSplash.
-  if (loadSettings().splashScreen !== false && !window.__clearExtensionNoSplash) {
+  if (
+    loadSettings().splashScreen !== false &&
+    !window.__clearExtensionNoSplash
+  ) {
     if (document.readyState !== "complete") {
       await new Promise((resolve) =>
         window.addEventListener("load", resolve, { once: true }),

@@ -18,12 +18,20 @@
 
   function injectThemeCSS() {
     const files = ["colors.css", "user.css"];
-    const target = document.head || document.documentElement;
+
     for (const file of files) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = chrome.runtime.getURL(file);
-      target.appendChild(link);
+      fetch(chrome.runtime.getURL(file))
+        .then((r) => r.text())
+        .then((css) => {
+          const style = document.createElement("style");
+          style.setAttribute("data-clear-theme", file);
+          style.textContent = css;
+          const target = document.head || document.documentElement;
+          target.appendChild(style);
+        })
+        .catch((err) =>
+          console.error("[Clear Theme] Failed to load " + file + ":", err),
+        );
     }
   }
 

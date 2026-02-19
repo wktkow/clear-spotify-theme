@@ -69,12 +69,6 @@ def create_manifest() -> dict:
                 "run_at": "document_start",
             }
         ],
-        "web_accessible_resources": [
-            {
-                "resources": ["colors.css", "user.css"],
-                "matches": ["https://open.spotify.com/*"],
-            }
-        ],
     }
 
 
