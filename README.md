@@ -4,6 +4,10 @@ Opinionated spicetify theme reducing screen clutter and improving readability
 
 ![Screenshot](images/screenshot1.png)
 
+## On Hover search bar! :D
+
+![On Hover Search Bar](images/onhover.gif)
+
 ## Installation
 
 1. Copy `user.css`, `color.ini`, and `theme.js` into your Spicetify Themes directory:
