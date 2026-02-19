@@ -61,6 +61,31 @@
       "clear-pause-dim",
       settings.pauseDim !== false,
     );
+    // Font choice: "default" | "inter" | "geist"
+    const font = settings.fontChoice || "default";
+    document.body.classList.toggle("clear-font-inter", font === "inter");
+    document.body.classList.toggle("clear-font-geist", font === "geist");
+    // Load the chosen font from Google Fonts
+    const fontUrls = {
+      inter:
+        "https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap",
+      geist:
+        "https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap",
+    };
+    let fontLink = document.getElementById("clear-font-link");
+    if (fontUrls[font]) {
+      if (!fontLink) {
+        fontLink = document.createElement("link");
+        fontLink.id = "clear-font-link";
+        fontLink.rel = "stylesheet";
+        document.head.appendChild(fontLink);
+      }
+      if (fontLink.href !== fontUrls[font]) {
+        fontLink.href = fontUrls[font];
+      }
+    } else if (fontLink) {
+      fontLink.remove();
+    }
   }
 
   applySettings();
@@ -213,6 +238,33 @@
       "Lyrics Fade",
       "Fade transition when opening or closing lyrics",
     );
+    // Font dropdown
+    {
+      const row = document.createElement("div");
+      row.className = "clear-settings-row";
+      row.innerHTML = `<div><div class="clear-settings-row-label">Font</div><div class="clear-settings-row-desc">Choose the app font</div></div>`;
+      const select = document.createElement("select");
+      select.className = "clear-settings-select";
+      [
+        { v: "default", l: "Spotify Default" },
+        { v: "inter", l: "Inter" },
+        { v: "geist", l: "Geist" },
+      ].forEach((o) => {
+        const opt = document.createElement("option");
+        opt.value = o.v;
+        opt.textContent = o.l;
+        if ((settings.fontChoice || "default") === o.v) opt.selected = true;
+        select.appendChild(opt);
+      });
+      select.addEventListener("change", () => {
+        const s = loadSettings();
+        s.fontChoice = select.value;
+        saveSettings(s);
+        applySettings();
+      });
+      row.appendChild(select);
+      modal.appendChild(row);
+    }
 
     // Close on overlay click
     overlay.addEventListener("click", (e) => {
