@@ -3,9 +3,7 @@
    Based on ShadeX by Sanoojes + community snippets
    ========================================================================== */
 
-/* Startup splash – covers UI until JS removes it.
-   The delayed fallback animation auto-removes the overlay after 10 s
-   in case JS gets stuck or never runs (e.g. Chrome extension). */
+/* Startup splash – covers UI until JS removes it */
 body::before {
   content: "";
   position: fixed;
@@ -13,7 +11,6 @@ body::before {
   z-index: 100000;
   background: #000;
   pointer-events: none;
-  animation: clearSplashOut 1s ease 10s forwards;
 }
 body.clear-bg-out::before {
   animation: clearSplashOut 1s ease forwards;

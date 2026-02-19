@@ -50,6 +50,14 @@
   // Not disabled → inject theme styles immediately (before DOM paints)
   injectThemeCSS();
 
+  // Safety net: if theme.js never removes the splash overlay (e.g. the
+  // web player DOM differs from desktop), force-remove it after 12 s.
+  setTimeout(() => {
+    if (document.body && !document.body.classList.contains("clear-bg-out")) {
+      document.body.classList.add("clear-bg-out");
+    }
+  }, 12000);
+
   function isLoggedIn() {
     // Logged-in Spotify has a user widget; logged-out pages show login buttons
     if (
