@@ -13,6 +13,51 @@
   "use strict";
 
   const DISABLED_KEY = "clear-extension-disabled";
+  const BUILD_ID = "v3-manifest-css-" + Date.now();
+
+  /* ── Diagnostics ──────────────────────────────────────────────────── */
+
+  console.log("[Clear Theme] guard.js loaded, build:", BUILD_ID);
+  console.log("[Clear Theme] document.readyState:", document.readyState);
+  console.log("[Clear Theme] location:", window.location.href);
+
+  /**
+   * Dump all stylesheets the browser knows about.
+   * This tells us definitively whether Chrome injected our CSS files.
+   */
+  function dumpStyleSheets(label) {
+    console.log(`[Clear Theme] === ${label} ===`);
+    console.log(`[Clear Theme] document.styleSheets.length: ${document.styleSheets.length}`);
+    for (let i = 0; i < document.styleSheets.length; i++) {
+      const sheet = document.styleSheets[i];
+      const href = sheet.href || "(inline)";
+      const owner = sheet.ownerNode ? sheet.ownerNode.nodeName : "none";
+      const disabled = sheet.disabled;
+      let ruleCount = "?";
+      try { ruleCount = sheet.cssRules.length; } catch (e) { ruleCount = "blocked"; }
+      console.log(`[Clear Theme]   [${i}] href=${href} owner=${owner} disabled=${disabled} rules=${ruleCount}`);
+    }
+
+    // Also check for chrome-extension:// links in the DOM
+    const extLinks = document.querySelectorAll('link[href*="chrome-extension://"]');
+    console.log(`[Clear Theme] <link> with chrome-extension:// : ${extLinks.length}`);
+    extLinks.forEach((el) => console.log(`[Clear Theme]   ${el.outerHTML}`));
+
+    // Check computed --spice-text on root
+    const root = document.documentElement;
+    const spiceText = getComputedStyle(root).getPropertyValue("--spice-text").trim();
+    console.log(`[Clear Theme] computed --spice-text: "${spiceText}"`);
+  }
+
+  // Dump at several stages to see when/if our sheets appear
+  dumpStyleSheets("AT document_start");
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => dumpStyleSheets("AT DOMContentLoaded"), { once: true });
+  }
+  window.addEventListener("load", () => dumpStyleSheets("AT window.load"), { once: true });
+  setTimeout(() => dumpStyleSheets("AT 3s"), 3000);
+  setTimeout(() => dumpStyleSheets("AT 10s"), 10000);
 
   /* ── CSS toggle ───────────────────────────────────────────────────── */
 
