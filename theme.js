@@ -2,13 +2,22 @@
   // Chrome extension guard – exit if disabled by login guard
   if (window.__clearExtensionDisabled) return;
 
-  // Early splash disable – hide overlay before UI even loads
+  // Early splash disable – hide overlay before UI even loads.
+  // At document_start body may not exist yet, so wait for it.
   try {
     const earlySettings = JSON.parse(
       localStorage.getItem("clear-theme-settings") || "{}",
     );
     if (earlySettings.splashScreen === false) {
-      document.body.classList.add("clear-no-splash");
+      const applyNoSplash = () =>
+        document.body
+          ? document.body.classList.add("clear-no-splash")
+          : document.addEventListener(
+              "DOMContentLoaded",
+              () => document.body.classList.add("clear-no-splash"),
+              { once: true },
+            );
+      applyNoSplash();
     }
   } catch {}
 
@@ -602,12 +611,16 @@
         window.addEventListener("load", resolve, { once: true }),
       );
     }
-    // Wait for Spotify's React UI to finish drawing
+    // Wait for Spotify's React UI to finish drawing (max 8 s so we
+    // never hang forever – the now-playing bar may not exist on web
+    // if no track has been played yet).
+    const splashDeadline = Date.now() + 8000;
     while (
-      !document.querySelector(".Root__main-view") ||
-      !document.querySelector(
-        ".main-nowPlayingBar-nowPlayingBar, .Root__now-playing-bar",
-      )
+      Date.now() < splashDeadline &&
+      (!document.querySelector(".Root__main-view") ||
+        !document.querySelector(
+          ".main-nowPlayingBar-nowPlayingBar, .Root__now-playing-bar",
+        ))
     ) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
