@@ -605,22 +605,19 @@
   initLyricsFade();
 
   // --- Fade out startup splash (wait for full page load + images) ---
-  if (loadSettings().splashScreen !== false) {
+  // Splash is desktop-only; Chrome extension sets __clearExtensionNoSplash.
+  if (loadSettings().splashScreen !== false && !window.__clearExtensionNoSplash) {
     if (document.readyState !== "complete") {
       await new Promise((resolve) =>
         window.addEventListener("load", resolve, { once: true }),
       );
     }
-    // Wait for Spotify's React UI to finish drawing (max 8 s so we
-    // never hang forever – the now-playing bar may not exist on web
-    // if no track has been played yet).
-    const splashDeadline = Date.now() + 8000;
+    // Wait for Spotify's React UI to finish drawing
     while (
-      Date.now() < splashDeadline &&
-      (!document.querySelector(".Root__main-view") ||
-        !document.querySelector(
-          ".main-nowPlayingBar-nowPlayingBar, .Root__now-playing-bar",
-        ))
+      !document.querySelector(".Root__main-view") ||
+      !document.querySelector(
+        ".main-nowPlayingBar-nowPlayingBar, .Root__now-playing-bar",
+      )
     ) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }

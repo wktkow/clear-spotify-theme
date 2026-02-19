@@ -50,13 +50,21 @@
   // Not disabled → inject theme styles immediately (before DOM paints)
   injectThemeCSS();
 
-  // Safety net: if theme.js never removes the splash overlay (e.g. the
-  // web player DOM differs from desktop), force-remove it after 12 s.
-  setTimeout(() => {
-    if (document.body && !document.body.classList.contains("clear-bg-out")) {
-      document.body.classList.add("clear-bg-out");
+  // The splash screen is a desktop-only UX feature. Skip it entirely
+  // in the Chrome extension so the page is never covered by a black overlay.
+  window.__clearExtensionNoSplash = true;
+  function applyNoSplash() {
+    if (document.body) {
+      document.body.classList.add("clear-no-splash");
+    } else {
+      document.addEventListener(
+        "DOMContentLoaded",
+        () => document.body.classList.add("clear-no-splash"),
+        { once: true },
+      );
     }
-  }, 12000);
+  }
+  applyNoSplash();
 
   function isLoggedIn() {
     // Logged-in Spotify has a user widget; logged-out pages show login buttons
