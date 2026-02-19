@@ -69,6 +69,16 @@
           }
         },
       },
+      {
+        label: "About Clear",
+        icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zm0 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm-.75 3a1 1 0 1 1 1.5 0 1 1 0 0 1-1.5 0zM7 7h2v5H7V7z"/></svg>`,
+        action: () => {
+          window.open(
+            "https://github.com/wktkow/clear-spotify-theme",
+            "_blank",
+          );
+        },
+      },
     ];
 
     items.forEach((item) => {

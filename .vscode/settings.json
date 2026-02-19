@@ -1,0 +1,7 @@
+{
+  "chat.tools.terminal.autoApprove": {
+    "spicetify": true,
+    "/opt/scripts/s9": true,
+    "flatpak": true
+  }
+}
