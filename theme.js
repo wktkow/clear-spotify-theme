@@ -208,6 +208,11 @@
       "Startup Splash",
       "Show the clear. splash screen on startup",
     );
+    addToggle(
+      "lyricsFade",
+      "Lyrics Fade",
+      "Fade transition when opening or closing lyrics",
+    );
 
     // Close on overlay click
     overlay.addEventListener("click", (e) => {
@@ -397,6 +402,75 @@
   }
 
   initSearchBarTimer();
+
+  // --- Lyrics fade animation ---
+  // Covers React mount/unmount jank with a black overlay on the main content area.
+  // Lyrics live inside .Root__main-view (NOT the right sidebar).
+  function initLyricsFade() {
+    let animating = false;
+    let lyricsWasOpen = !!document.querySelector(".lyrics-lyrics-container");
+
+    // Create overlay (will be inserted into the main view container)
+    const overlay = document.createElement("div");
+    overlay.id = "clear-lyrics-overlay";
+    overlay.style.cssText =
+      "position:absolute;inset:0;z-index:9999;background:#000;opacity:0;pointer-events:none;border-radius:var(--border-radius-md);";
+
+    function ensureOverlay() {
+      const mainView = document.querySelector(".Root__main-view");
+      if (!mainView) return false;
+      // Make main view a positioning context for the absolute overlay
+      if (getComputedStyle(mainView).position === "static") {
+        mainView.style.position = "relative";
+      }
+      if (!mainView.contains(overlay)) {
+        mainView.appendChild(overlay);
+      }
+      return true;
+    }
+
+    // Raw rAF opacity stepper
+    function stepOpacity(el, from, to, duration) {
+      return new Promise((resolve) => {
+        const start = performance.now();
+        function tick(now) {
+          const t = Math.min((now - start) / duration, 1);
+          const e = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+          el.style.opacity = String(from + (to - from) * e);
+          if (t < 1) requestAnimationFrame(tick);
+          else resolve();
+        }
+        requestAnimationFrame(tick);
+      });
+    }
+
+    async function doReveal() {
+      if (animating) return;
+      if (loadSettings().lyricsFade === false) return;
+      if (!ensureOverlay()) return;
+      animating = true;
+      // Snap black instantly over the main view
+      overlay.style.opacity = "1";
+      // Never set pointer-events:auto — overlay is purely visual, never blocks clicks
+      // Wait for React to settle
+      await new Promise((r) => setTimeout(r, 400));
+      // Fade out to reveal
+      await stepOpacity(overlay, 1, 0, 500);
+      animating = false;
+    }
+
+    // Watch the DOM for lyrics container being added or removed
+    const obs = new MutationObserver(() => {
+      const lyricsNow = !!document.querySelector(".lyrics-lyrics-container");
+      if (lyricsNow !== lyricsWasOpen) {
+        lyricsWasOpen = lyricsNow;
+        doReveal();
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  initLyricsFade();
 
   // --- Fade out startup splash (wait for full page load + images) ---
   if (loadSettings().splashScreen !== false) {
