@@ -87,21 +87,46 @@
   }
 
   function getUsername() {
-    // Try href first (desktop link elements)
-    const link = document.querySelector(
+    // 1. Spicetify API (desktop) – most reliable
+    try {
+      const sp = window.Spicetify;
+      const u =
+        sp?.Platform?.UserAPI?._product_state?.username ||
+        sp?.Platform?.Session?.username ||
+        sp?.Platform?.username;
+      if (u) return u;
+    } catch {}
+
+    // 2. User widget link with href (desktop <a> tag)
+    const widgetLink = document.querySelector(
       '.main-userWidget-box a[href*="/user/"], [data-testid="user-widget-link"][href]',
     );
-    if (link) {
-      const match = link.getAttribute("href")?.match(/\/user\/([^/?#]+)/);
-      if (match) return match[1];
+    if (widgetLink) {
+      const m = widgetLink.getAttribute("href")?.match(/\/user\/([^/?#]+)/);
+      if (m) return m[1];
     }
-    // Fallback: extract from a profile link anywhere on the page
-    const profileLink = document.querySelector('a[href*="/user/"]');
-    if (profileLink) {
-      const match = profileLink
-        .getAttribute("href")
-        ?.match(/\/user\/([^/?#]+)/);
-      if (match) return match[1];
+
+    // 3. Web: match the display name from user widget to a page link
+    const userWidget = document.querySelector(
+      '[data-testid="user-widget-link"]',
+    );
+    if (userWidget) {
+      const displayName = userWidget.getAttribute("aria-label");
+      if (displayName) {
+        for (const a of document.querySelectorAll('a[href*="/user/"]')) {
+          if (a.textContent.trim() === displayName) {
+            const m = a.getAttribute("href")?.match(/\/user\/([^/?#]+)/);
+            if (m) return m[1];
+          }
+        }
+      }
+    }
+
+    // 4. Last resort: any user link on page (may be wrong user)
+    const anyLink = document.querySelector('a[href*="/user/"]');
+    if (anyLink) {
+      const m = anyLink.getAttribute("href")?.match(/\/user\/([^/?#]+)/);
+      if (m) return m[1];
     }
     return null;
   }
@@ -408,6 +433,23 @@
       document.body?.classList.contains("spotify__container--is-web") ||
       document.querySelector(".spotify__container--is-web");
 
+    // SPA-aware navigation helper – avoids full page reloads on web
+    function navigateSPA(path) {
+      if (window.Spicetify?.Platform?.History) {
+        Spicetify.Platform.History.push(path);
+        return;
+      }
+      // Web: create a link and click it – Spotify's SPA intercepts <a> clicks
+      const a = document.createElement("a");
+      a.href = path;
+      a.style.cssText =
+        "position:fixed;opacity:0;pointer-events:none;top:-9999px;";
+      const root = document.getElementById("main") || document.body;
+      root.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 100);
+    }
+
     const items = [
       // Marketplace: desktop only (Spicetify extension, doesn't exist on web)
       ...(!isWeb
@@ -415,13 +457,7 @@
             {
               label: "Marketplace",
               icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75zm0 5a.75.75 0 0 1 .75-.75h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1-.75-.75z"/></svg>`,
-              action: () => {
-                if (window.Spicetify?.Platform?.History) {
-                  Spicetify.Platform.History.push("/marketplace");
-                } else {
-                  window.location.href = "/marketplace";
-                }
-              },
+              action: () => navigateSPA("/marketplace"),
             },
           ]
         : []),
@@ -430,14 +466,13 @@
         icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM3.5 4.5a4.5 4.5 0 1 1 9 0 4.5 4.5 0 0 1-9 0zM8 10c-3.037 0-5.5 1.343-5.5 3v1.5h11V13c0-1.657-2.463-3-5.5-3zm-7 3c0-2.761 3.134-4.5 7-4.5s7 1.739 7 4.5v2a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5v-2z"/></svg>`,
         action: () => {
           const username = getUsername();
-          if (username) {
-            if (window.Spicetify?.Platform?.History) {
-              Spicetify.Platform.History.push(`/user/${username}`);
-            } else {
-              window.location.href = `/user/${username}`;
-            }
-          }
+          if (username) navigateSPA(`/user/${username}`);
         },
+      },
+      {
+        label: "Spotify Settings",
+        icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm1.219 11.188c-.332.273-.754.5-1.219.5s-.887-.227-1.219-.5c-.332.273-.754.5-1.219.5-.912 0-1.562-.852-1.562-1.875s.65-1.875 1.562-1.875c.465 0 .887.227 1.219.5.332-.273.754-.5 1.219-.5s.887.227 1.219.5c.332-.273.754-.5 1.219-.5.912 0 1.562.852 1.562 1.875s-.65 1.875-1.562 1.875c-.465 0-.887-.227-1.219-.5zM8 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>`,
+        action: () => navigateSPA("/preferences"),
       },
       {
         label: "Clear Settings",
@@ -567,9 +602,22 @@
   // --- Lyrics fade animation ---
   // Covers React mount/unmount jank with a black overlay on the main content area.
   // Lyrics live inside .Root__main-view (NOT the right sidebar).
+  // Detect whether lyrics are currently visible (desktop + web)
+  function areLyricsOpen() {
+    // Desktop: Spicetify lyrics extension class
+    if (document.querySelector(".lyrics-lyrics-container")) return true;
+    // Web: lyrics-cinema gets children when lyrics are shown
+    const cinema = document.getElementById("lyrics-cinema");
+    if (cinema && cinema.children.length > 0) return true;
+    // Web: lyrics button active state
+    const btn = document.querySelector('[data-testid="lyrics-button"]');
+    if (btn && btn.getAttribute("data-active") === "true") return true;
+    return false;
+  }
+
   function initLyricsFade() {
     let animating = false;
-    let lyricsWasOpen = !!document.querySelector(".lyrics-lyrics-container");
+    let lyricsWasOpen = areLyricsOpen();
 
     // Create overlay (will be inserted into the main view container)
     const overlay = document.createElement("div");
@@ -620,15 +668,35 @@
       animating = false;
     }
 
-    // Watch the DOM for lyrics container being added or removed
+    // Watch the DOM for lyrics state changes (desktop + web)
     const obs = new MutationObserver(() => {
-      const lyricsNow = !!document.querySelector(".lyrics-lyrics-container");
+      const lyricsNow = areLyricsOpen();
       if (lyricsNow !== lyricsWasOpen) {
         lyricsWasOpen = lyricsNow;
         doReveal();
       }
     });
     obs.observe(document.body, { childList: true, subtree: true });
+
+    // Web: also observe the lyrics button data-active attribute
+    function watchLyricsButton() {
+      const btn = document.querySelector('[data-testid="lyrics-button"]');
+      if (!btn) return false;
+      new MutationObserver(() => {
+        const lyricsNow = areLyricsOpen();
+        if (lyricsNow !== lyricsWasOpen) {
+          lyricsWasOpen = lyricsNow;
+          doReveal();
+        }
+      }).observe(btn, { attributes: true, attributeFilter: ["data-active"] });
+      return true;
+    }
+    if (!watchLyricsButton()) {
+      const retry = new MutationObserver(() => {
+        if (watchLyricsButton()) retry.disconnect();
+      });
+      retry.observe(document.body, { childList: true, subtree: true });
+    }
   }
 
   initLyricsFade();
