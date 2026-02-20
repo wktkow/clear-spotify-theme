@@ -33,6 +33,21 @@
     { sel: "#Desktop_LeftSidebar_Id", cls: ["Root__nav-bar"] },
     { sel: "[data-right-sidebar-hidden]", cls: ["Root__top-container"] },
 
+    // Search section: web uses hashed class names, desktop uses main-globalNav-*.
+    // These mappings keep the search bar visible in the dynamic nav CSS.
+    {
+      sel: '#global-nav-bar > div:has([role="search"])',
+      cls: ["main-globalNav-searchSection"],
+    },
+    {
+      sel: '#global-nav-bar div:has(> [data-testid="home-button"])',
+      cls: ["main-globalNav-searchContainer"],
+    },
+    {
+      sel: '#global-nav-bar [role="search"]',
+      cls: ["main-globalNav-searchInputContainer"],
+    },
+
     // Now-playing bar (web uses <aside>, desktop uses <footer>)
     {
       sel: '[data-testid="now-playing-bar"]',
@@ -49,6 +64,30 @@
     { sel: '[data-testid="root"]', cls: ["Root__top-container"] },
   ];
 
+  /**
+   * Find the right sidebar grid child and inject Root__right-sidebar.
+   * Walks up from Desktop_PanelContainer_Id to the direct child of the
+   * grid container ([data-right-sidebar-hidden]).  This element has
+   * grid-area: right-sidebar in Spotify's CSS and needs the Spicetify
+   * class for the sidebar-swap snippet to move it to left-sidebar.
+   */
+  function injectRightSidebar() {
+    if (document.querySelector(".Root__right-sidebar")) return 0;
+    const grid = document.querySelector("[data-right-sidebar-hidden]");
+    if (!grid) return 0;
+    const panel = document.getElementById("Desktop_PanelContainer_Id");
+    if (!panel) return 0;
+    let el = panel;
+    while (el && el.parentElement !== grid) {
+      el = el.parentElement;
+    }
+    if (el && el.parentElement === grid) {
+      el.classList.add("Root__right-sidebar");
+      return 1;
+    }
+    return 0;
+  }
+
   function injectClasses() {
     let injected = 0;
     for (const { sel, cls } of CLASS_MAP) {
@@ -62,6 +101,7 @@
         }
       }
     }
+    injected += injectRightSidebar();
     return injected;
   }
 
