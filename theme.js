@@ -825,7 +825,6 @@
     let ws = null;
     let wsConnected = false;
     const wsData = new Float32Array(BAR_COUNT);
-    const displayData = new Float32Array(BAR_COUNT); // lerp-smoothed for rendering
     let reconnectTimer = null;
     let lastMsgTime = 0;
 
@@ -1016,23 +1015,11 @@
       animId = requestAnimationFrame(render);
       if (!ctx) return;
 
-      // Graceful staleness: 300ms grace, then fade over 500ms.
-      // Replaces the old hard 150ms zero-out that caused flicker when
-      // Electron's event loop stalled under heavy UI load.
-      if (lastMsgTime > 0) {
-        const staleMs = performance.now() - lastMsgTime;
-        if (staleMs > 300) {
-          const fade = Math.max(0, 1 - (staleMs - 300) / 500);
-          for (let i = 0; i < BAR_COUNT; i++) wsData[i] *= fade;
-          if (fade === 0) lastMsgTime = 0;
-        }
-      }
-
-      // Lightweight lerp: smooths transport jitter (dropped/delayed WS
-      // messages) and micro-oscillations visible on pixel displays but
-      // hidden in terminal rendering (cava).  ~33ms convergence at 60fps.
-      for (let i = 0; i < BAR_COUNT; i++) {
-        displayData[i] += (wsData[i] - displayData[i]) * 0.45;
+      // Zero bars if daemon stopped mid-stream (no data for 1 second).
+      // C++ gravity already handles visual decay; no JS smoothing needed.
+      if (lastMsgTime > 0 && performance.now() - lastMsgTime > 1000) {
+        wsData.fill(0);
+        lastMsgTime = 0;
       }
 
       resizeCanvas();
@@ -1050,7 +1037,7 @@
       const baseY = H - padding;
 
       for (let i = 0; i < BAR_COUNT; i++) {
-        const v = displayData[i];
+        const v = wsData[i];
         const h = Math.max(1 * dpr, v * maxH);
         const x = padding + i * (barW + gap);
         const y = baseY - h;
@@ -1075,7 +1062,6 @@
         if (overlay) overlay.classList.add("clear-visualizer-overlay--open");
         if (btn) btn.classList.add("clear-visualizer-btn--active");
         wsData.fill(0);
-        displayData.fill(0);
         connectWs();
         animId = requestAnimationFrame(render);
       } else {

@@ -1,6 +1,6 @@
 // fft.h — Audio processor for the Spotify visualizer.
 // Sliding-window FFT, log-frequency binning, per-bar EQ,
-// auto-sensitivity, integral smoothing, and gravity falloff.
+// auto-sensitivity, asymmetric EMA smoothing, and gravity falloff.
 // Closely follows cava's signal processing pipeline.
 // Header-only, no external dependencies.
 #ifndef VIS_FFT_H
@@ -13,11 +13,14 @@
 
 // ---- Tuning constants (matched to cava defaults) ----
 
-// Temporal IIR smoothing factor.  Each bar's output is accumulated as:
-//   out = mem * NR + raw;  mem = out;
-// Steady-state gain ~ 1/(1-NR).  Higher = smoother but laggier.
-// Cava default: 0.77.
+// Asymmetric EMA smoothing factors.
+// Release (falling bars): standard EMA with NOISE_REDUCTION = 0.77.
+// Attack (rising bars): fast EMA with ATTACK_SMOOTH = 0.3.
+// EMA form (gain = 1.0) replaces the old IIR accumulator (gain ~4.35)
+// which caused mem to overshoot well above 1.0, keeping bars clamped
+// at the display ceiling for 300-400ms after each peak.
 constexpr float NOISE_REDUCTION = 0.77f;
+constexpr float ATTACK_SMOOTH   = 0.3f;
 
 // Gravity: accelerating fall when signal drops.
 // Cava uses step=0.028, mod = 1.54/NR ~ 2.0 at 60fps.
@@ -192,7 +195,7 @@ static void processFrame(const float* newSamples, float* bars) {
         rawBars[b] = sqrtf(norm) * g_eq[b] * g_sens;
     }
 
-    // 5. Gravity + integral smoothing + clamping (cava order)
+    // 5. Gravity + asymmetric EMA smoothing (cava gravity order)
     bool overshoot = false;
     for (int b = 0; b < BAR_COUNT; b++) {
         // Gravity: accelerating fall when signal drops
@@ -206,19 +209,20 @@ static void processFrame(const float* newSamples, float* bars) {
         }
         g_prevOut[b] = rawBars[b];
 
-        // Integral smoothing (temporal IIR low-pass filter).
-        // Accumulates: out = mem * NR + raw.  Steady-state gain ~ 1/(1-NR).
-        // Store UNCLAMPED value in mem — this is critical for autosens stability.
-        // Clamped mem causes bars to oscillate at the 1.0 boundary because the
-        // system loses inertia: when signal drops just below 0.23, bars instantly
-        // leave the overshoot zone, sens grows, bars overshoot again = jitter.
-        // Unclamped mem provides the inertia that lets autosens converge smoothly.
-        rawBars[b] = g_mem[b] * NOISE_REDUCTION + rawBars[b];
-        g_mem[b] = rawBars[b];  // store UNCLAMPED (matches cava)
+        // Overshoot on pre-EMA gravity output tells autosens to back off.
+        if (rawBars[b] > 1.0f) overshoot = true;
 
-        // Clamp output for display only — overshoot tracking uses unclamped value
-        if (rawBars[b] > 1.0f) { overshoot = true; rawBars[b] = 1.0f; }
-        if (rawBars[b] < 0.0f) rawBars[b] = 0.0f;
+        // Asymmetric EMA: fast attack (beats stay punchy), slow release
+        // (smooth cava-like decay).  Input capped at 1.0 so mem can never
+        // exceed 1.0 — eliminates the multi-hundred-ms lockup that the
+        // old accumulation IIR (gain ~4.35) caused at peak values.
+        float target = std::min(rawBars[b], 1.0f);
+        if (target > g_mem[b]) {
+            rawBars[b] = g_mem[b] * ATTACK_SMOOTH + target * (1.0f - ATTACK_SMOOTH);
+        } else {
+            rawBars[b] = g_mem[b] * NOISE_REDUCTION + target * (1.0f - NOISE_REDUCTION);
+        }
+        g_mem[b] = rawBars[b];
 
         bars[b] = rawBars[b];
     }
