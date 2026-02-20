@@ -2162,6 +2162,8 @@ body.clear-hide-marketplace .clear-kebab-item-marketplace {
 }
 
 #clear-visualizer-canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
 }

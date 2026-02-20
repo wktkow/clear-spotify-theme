@@ -820,8 +820,6 @@
     let canvas = null;
     let gl = null;
     let glProgram = null;
-    let glResolutionLoc = null;
-    let glBarCountLoc = null;
     let msgEl = null;
 
     // WebSocket state
@@ -833,75 +831,33 @@
     let lastDiagTime = 0;
 
     // --- WebGL shaders ---
-    // Vertex shader: full-screen triangle (no geometry buffer needed)
+    // Each bar is a separate quad (2 triangles). Vertex positions and
+    // per-bar brightness are computed in JS and uploaded every frame.
     const VERT_SRC = `
       attribute vec2 a_pos;
-      void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
-    `;
-
-    // Fragment shader: draws all bars in a single pass.
-    // Bar data is passed via a 1D texture (avoids WebGL1 non-constant
-    // array indexing limitation).
-    const FRAG_SRC = `
-      precision mediump float;
-      uniform vec2 u_resolution;
-      uniform sampler2D u_barTex;
-      uniform float u_barCount;
-
+      attribute float a_alpha;
+      varying float v_alpha;
       void main() {
-        vec2 uv = gl_FragCoord.xy / u_resolution;
-        float padding = 16.0 / u_resolution.x;
-        float usable = 1.0 - padding * 2.0;
-        float gap = 1.5 / u_resolution.x;
-        float barW = (usable - gap * (u_barCount - 1.0)) / u_barCount;
-        float stride = barW + gap;
-
-        // Which bar are we in?
-        float localX = uv.x - padding;
-        if (localX < 0.0 || localX > usable) { discard; }
-        float barIdx = floor(localX / stride);
-        float withinBar = localX - barIdx * stride;
-
-        // Gap between bars
-        if (withinBar > barW) { discard; }
-        if (barIdx < 0.0 || barIdx >= u_barCount) { discard; }
-
-        // Sample bar value from texture (center of texel)
-        float texU = (barIdx + 0.5) / u_barCount;
-        float v = texture2D(u_barTex, vec2(texU, 0.5)).r;
-
-        // Vertical padding
-        float vPad = 16.0 / u_resolution.y;
-        float barMaxH = 1.0 - vPad * 2.0;
-        float barH = max(1.0 / u_resolution.y, v * barMaxH);
-        float barTop = vPad + barH;
-
-        // Bar fills from bottom (uv.y = vPad) up to barTop
-        if (uv.y < vPad || uv.y > barTop) { discard; }
-
-        // Rounded top corners
-        float radiusPx = min(barW * u_resolution.x * 0.4, 3.0);
-        float radius = radiusPx / u_resolution.y;
-        if (uv.y > barTop - radius) {
-          float rxPx = radiusPx;
-          float barWPx = barW * u_resolution.x;
-          float cxPx = (withinBar * u_resolution.x) - barWPx * 0.5;
-          float edgePx = barWPx * 0.5 - rxPx;
-          if (abs(cxPx) > edgePx) {
-            float dx = abs(cxPx) - edgePx;
-            float dy = (uv.y - (barTop - radius)) * u_resolution.y;
-            if (dx * dx + dy * dy > rxPx * rxPx) { discard; }
-          }
-        }
-
-        float alpha = 0.3 + v * 0.7;
-        gl_FragColor = vec4(alpha, alpha, alpha, alpha);
+        v_alpha = a_alpha;
+        gl_Position = vec4(a_pos, 0.0, 1.0);
       }
     `;
 
-    let glBarTex = null;
-    // Reusable texture upload buffer (128 wide for padding, only 70 used)
-    const texBuf = new Uint8Array(128);
+    const FRAG_SRC = `
+      precision mediump float;
+      varying float v_alpha;
+      void main() {
+        gl_FragColor = vec4(v_alpha, v_alpha, v_alpha, v_alpha);
+      }
+    `;
+
+    // 70 bars × 6 verts × 3 floats (x, y, alpha) = 1260 floats
+    const VERTS_PER_BAR = 6;
+    const FLOATS_PER_VERT = 3;
+    const vertData = new Float32Array(
+      BAR_COUNT * VERTS_PER_BAR * FLOATS_PER_VERT,
+    );
+    let glVertBuf = null;
 
     function initWebGL() {
       if (!canvas) return false;
@@ -944,46 +900,20 @@
 
       gl.useProgram(glProgram);
 
-      // Full-screen quad (two triangles)
-      const verts = new Float32Array([
-        -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1,
-      ]);
-      const buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+      // Dynamic vertex buffer for bar geometry (updated every frame)
+      glVertBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, glVertBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, vertData.byteLength, gl.DYNAMIC_DRAW);
 
+      // Vertex layout: [x, y, alpha] per vertex, stride = 12 bytes
+      const stride = FLOATS_PER_VERT * 4;
       const aPos = gl.getAttribLocation(glProgram, "a_pos");
       gl.enableVertexAttribArray(aPos);
-      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, stride, 0);
 
-      // 1D texture for bar data (BAR_COUNT wide, LUMINANCE, NEAREST)
-      // UNPACK_ALIGNMENT=1 because BAR_COUNT (70) is not a multiple of 4
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-      glBarTex = gl.createTexture();
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, glBarTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.LUMINANCE,
-        BAR_COUNT,
-        1,
-        0,
-        gl.LUMINANCE,
-        gl.UNSIGNED_BYTE,
-        null,
-      );
-
-      // Uniform locations
-      const barTexLoc = gl.getUniformLocation(glProgram, "u_barTex");
-      gl.uniform1i(barTexLoc, 0);
-      glResolutionLoc = gl.getUniformLocation(glProgram, "u_resolution");
-      glBarCountLoc = gl.getUniformLocation(glProgram, "u_barCount");
-      gl.uniform1f(glBarCountLoc, BAR_COUNT);
+      const aAlpha = gl.getAttribLocation(glProgram, "a_alpha");
+      gl.enableVertexAttribArray(aAlpha);
+      gl.vertexAttribPointer(aAlpha, 1, gl.FLOAT, false, stride, 8);
 
       // Blending: premultiplied alpha
       gl.enable(gl.BLEND);
@@ -1140,7 +1070,7 @@
 
       canvas = document.createElement("canvas");
       canvas.id = "clear-visualizer-canvas";
-      canvas.style.display = "none";
+      canvas.style.cssText = "position:absolute;inset:0;display:none;";
       overlay.appendChild(canvas);
 
       msgEl = document.createElement("div");
@@ -1179,13 +1109,11 @@
       if (canvas.width !== tw || canvas.height !== th) {
         canvas.width = tw;
         canvas.height = th;
-        canvas.style.width = overlay.clientWidth + "px";
-        canvas.style.height = overlay.clientHeight + "px";
         if (gl) gl.viewport(0, 0, tw, th);
       }
     }
 
-    // --- Render loop (WebGL) ---
+    // --- Render loop (WebGL per-bar geometry) ---
     function render() {
       if (!active) return;
       animId = requestAnimationFrame(render);
@@ -1197,49 +1125,55 @@
         lastMsgTime = 0;
       }
 
-      // Diagnostic: log bar values every 2 seconds to pinpoint lockup layer
+      // Diagnostic: log bar values every 2 seconds
       const now = performance.now();
       if (now - lastDiagTime > 2000 && lastMsgTime > 0) {
-        const sample = [
-          wsData[0],
-          wsData[10],
-          wsData[30],
-          wsData[50],
-          wsData[69],
-        ];
         console.log(
           "[VIS-DIAG] bars[0,10,30,50,69]:",
-          sample.map((v) => v.toFixed(3)).join(", "),
+          [wsData[0], wsData[10], wsData[30], wsData[50], wsData[69]]
+            .map((v) => v.toFixed(3))
+            .join(", "),
         );
         lastDiagTime = now;
       }
 
       resizeCanvas();
+      const W = canvas.width;
+      const H = canvas.height;
+      if (W === 0 || H === 0) return;
 
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
 
-      gl.uniform2f(glResolutionLoc, canvas.width, canvas.height);
+      // Bar layout in pixels, mapped to clip space (-1..1)
+      const padX = 16,
+        padY = 16,
+        gap = 2;
+      const usable = W - padX * 2;
+      const barW = (usable - gap * (BAR_COUNT - 1)) / BAR_COUNT;
+      const maxH = H - padY * 2;
 
-      // Upload bar values as 1D LUMINANCE texture (float → 0-255 byte)
+      let vi = 0;
       for (let i = 0; i < BAR_COUNT; i++) {
-        texBuf[i] = Math.min(255, Math.max(0, (wsData[i] * 255) | 0));
+        const v = wsData[i];
+        const h = Math.max(2, v * maxH);
+        const a = 0.3 + v * 0.7;
+        const l = ((padX + i * (barW + gap)) / W) * 2 - 1;
+        const r = ((padX + i * (barW + gap) + barW) / W) * 2 - 1;
+        const b = (padY / H) * 2 - 1;
+        const t = ((padY + h) / H) * 2 - 1;
+        // Triangle 1
+        vertData[vi++] = l; vertData[vi++] = b; vertData[vi++] = a;
+        vertData[vi++] = r; vertData[vi++] = b; vertData[vi++] = a;
+        vertData[vi++] = l; vertData[vi++] = t; vertData[vi++] = a;
+        // Triangle 2
+        vertData[vi++] = l; vertData[vi++] = t; vertData[vi++] = a;
+        vertData[vi++] = r; vertData[vi++] = b; vertData[vi++] = a;
+        vertData[vi++] = r; vertData[vi++] = t; vertData[vi++] = a;
       }
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, glBarTex);
-      gl.texSubImage2D(
-        gl.TEXTURE_2D,
-        0,
-        0,
-        0,
-        BAR_COUNT,
-        1,
-        gl.LUMINANCE,
-        gl.UNSIGNED_BYTE,
-        texBuf.subarray(0, BAR_COUNT),
-      );
 
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertData);
+      gl.drawArrays(gl.TRIANGLES, 0, BAR_COUNT * VERTS_PER_BAR);
     }
 
     // --- Toggle ---
