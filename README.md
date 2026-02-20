@@ -18,7 +18,7 @@ Opinionated Spotify client reducing screen clutter and improving readability.
 
 0. Make sure you have Spotify installed and you are logged in.
 
-1. Open PowerShell and paste:
+1. Open PowerShell **_(as administrator)_** and paste:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/wktkow/clear-spotify-client/main/powershell/install.ps1 | iex
@@ -36,7 +36,7 @@ iwr -useb https://raw.githubusercontent.com/wktkow/clear-spotify-client/main/pow
 
 ### On Windows:
 
-Open PowerShell and paste:
+Open PowerShell **_(as administrator)_** and paste:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/wktkow/clear-spotify-client/main/powershell/uninstall.ps1 | iex
