@@ -1,7 +1,7 @@
 // fft.h — Audio processor for the Spotify visualizer.
 // Sliding-window FFT, log-frequency binning, per-bar EQ,
-// auto-sensitivity, asymmetric EMA smoothing, and gravity falloff.
-// Closely follows cava's signal processing pipeline.
+// auto-sensitivity, gravity falloff, and integral accumulator.
+// Matches cava's actual signal processing pipeline from cavacore.c.
 // Header-only, no external dependencies.
 #ifndef VIS_FFT_H
 #define VIS_FFT_H
@@ -13,31 +13,33 @@
 
 // ---- Tuning constants (matched to cava defaults) ----
 
-// Asymmetric smoothing: instant attack (mem snaps to raw on rise),
-// pure exponential decay on fall (mem *= NOISE_REDUCTION).
-// This matches cava's integral filter exactly.
+// Integral filter: IIR accumulator (mem = mem * NR + input).
+// This is cava's actual "noise reduction" filter — an integral that
+// amplifies sustained signals (~4.3x at steady state with NR=0.77)
+// and provides smooth exponential decay when input drops.
 constexpr float NOISE_REDUCTION = 0.77f;
 
-// Gravity: subtraction-based accelerating fall from peak.
-// peak -= GRAVITY * velocity; velocity += GRAVITY;
-// With GRAVITY=0.08 a bar falls from 1.0 to 0 in ~18 frames (300ms).
-// This replaces the old multiplicative formula which decayed too slowly.
-constexpr float GRAVITY         = 0.08f;
+// Gravity: multiplicative falloff from peak (cava's formula).
+// output = peak * (1 - fall^2 * gravity_mod), fall += 0.028/frame.
+// gravity_mod = pow(60/fps, 2.5) * 1.54 / NR  (= 2.0 at 60fps, NR=0.77).
+// Applied BEFORE integral smoothing (matching cava's actual order).
+constexpr float GRAVITY_FALL_INCR = 0.028f;
+
+// Silence threshold: float32 PA captures microscopic warmup noise
+// that cava never sees (cava uses S16LE where it truncates to zero).
+// Treat anything below 16-bit noise floor as silence to prevent
+// auto-sensitivity from ramping during inaudible noise.
+constexpr float SILENCE_THRESHOLD = 1e-4f;
 
 // Auto-sensitivity (global gain).
 // attack 0.98 per frame on overshoot, release 1.001 per frame.
-// sens_init mode ramps fast (1.1x/frame) until first overshoot.
-// Silence is detected on raw PCM (any non-zero = not silent), matching
-// cava's approach — prevents sens drift on FFT floating-point artifacts.
-// sensInit boost is gated on audioMax > SENS_INIT_AUDIO_GATE to prevent
-// explosive ramp on microscopic PA warmup noise, and capped at
-// SENS_INIT_CAP so the worst-case lockup when real music arrives is brief.
+// sens_init mode ramps fast (1.1x/frame) until first overshoot,
+// capped at SENS_INIT_CAP as safety net for float32 edge cases.
 constexpr float SENS_INIT       = 1.0f;
 constexpr float SENS_ATTACK     = 0.98f;
 constexpr float SENS_RELEASE    = 1.001f;
 constexpr float SENS_INIT_BOOST = 1.1f;
 constexpr float SENS_INIT_CAP   = 2.0f;
-constexpr float SENS_INIT_AUDIO_GATE = 0.005f;
 constexpr float SENS_MIN        = 0.02f;
 constexpr float SENS_MAX        = 20.0f;
 
@@ -94,6 +96,7 @@ static float g_eq[BAR_COUNT];           // per-bar EQ weight
 static float g_mem[BAR_COUNT];          // smoothing memory
 static float g_peak[BAR_COUNT];         // gravity peak tracker
 static float g_fall[BAR_COUNT];         // gravity fall velocity
+static float g_prev[BAR_COUNT];         // previous gravity output (pre-integral)
 static float g_sens;                    // auto-sensitivity (global gain)
 static bool  g_sensInit;                // fast initial ramp-up active
 static bool  g_inited = false;
@@ -133,6 +136,7 @@ static void initProcessor() {
     memset(g_mem, 0, sizeof(g_mem));
     memset(g_peak, 0, sizeof(g_peak));
     memset(g_fall, 0, sizeof(g_fall));
+    memset(g_prev, 0, sizeof(g_prev));
     g_sens = SENS_INIT;
     g_sensInit = true;
     g_inited = true;
@@ -173,10 +177,9 @@ static void processFrame(const float* newSamples, float* bars) {
         mag[i] = sqrtf(fftBuf[i].re * fftBuf[i].re + fftBuf[i].im * fftBuf[i].im);
 
     // 4. Bin into bars: average magnitude per frequency range, normalize, EQ
-    //    Silence is checked on raw PCM (audioMax == 0), matching cava's
-    //    approach.  Checking post-FFT bars was wrong: floating-point FFT
-    //    artifacts × sens could fool the silence gate during true silence.
-    bool silence = (audioMax == 0.0f);
+    //    Silence is checked on raw PCM level vs threshold (matching cava's
+    //    S16LE behavior where sub-16bit noise truncates to zero).
+    bool silence = (audioMax < SILENCE_THRESHOLD);
     float rawBars[BAR_COUNT];
     for (int b = 0; b < BAR_COUNT; b++) {
         float sum = 0.0f;
@@ -190,55 +193,56 @@ static void processFrame(const float* newSamples, float* bars) {
         rawBars[b] = sqrtf(norm) * g_eq[b] * g_sens;
     }
 
-    // 5. Smoothing + gravity (matches cava's actual pipeline).
-    //    Order: (a) instant-attack / exponential-decay smoothing on raw,
-    //           (b) gravity on the smoothed output.
-    //    The old code applied gravity BEFORE EMA, causing double-smoothing
-    //    that kept bars visually stuck at peak for 400ms.
+    // 5. Gravity + integral smoothing (cava's actual pipeline).
+    //    Order: (a) gravity falloff, (b) integral accumulator.
+    //    Previous rounds had this backwards, causing lockup.
+    //    gravity_mod adjusts for framerate: pow(60/fps,2.5)*1.54/NR
+    float gravity_mod = powf(60.0f / (float)SEND_FPS, 2.5f) * 1.54f / NOISE_REDUCTION;
+    if (gravity_mod < 1.0f) gravity_mod = 1.0f;
+
     bool overshoot = false;
     for (int b = 0; b < BAR_COUNT; b++) {
-        float raw = rawBars[b];
+        float val = rawBars[b];
 
-        // (a) Cava-style smoothing: snap up instantly, decay exponentially.
-        if (raw > g_mem[b]) {
-            g_mem[b] = raw;
+        // (a) Gravity falloff: compare raw against previous gravity output.
+        //     If falling, use peak*(1 - fall^2*gravity_mod) for smooth drop.
+        //     If rising or equal, set new peak and reset fall velocity.
+        if (val < g_prev[b] && NOISE_REDUCTION > 0.1f) {
+            val = g_peak[b] * (1.0f - g_fall[b] * g_fall[b] * gravity_mod);
+            if (val < 0.0f) val = 0.0f;
+            g_fall[b] += GRAVITY_FALL_INCR;
         } else {
-            g_mem[b] *= NOISE_REDUCTION;
-        }
-
-        // Overshoot detection for auto-sensitivity.
-        if (g_mem[b] > 1.0f) overshoot = true;
-
-        // (b) Gravity: accelerating fall from peak (subtraction form).
-        //     peak -= GRAVITY * velocity; velocity += GRAVITY;
-        //     Gives a smooth parabolic fall over ~300ms.
-        if (g_mem[b] >= g_peak[b]) {
-            g_peak[b] = g_mem[b];
+            g_peak[b] = val;
             g_fall[b] = 0.0f;
-        } else {
-            g_peak[b] -= GRAVITY * g_fall[b];
-            g_fall[b] += GRAVITY;
-            // Peak can't go below the smoothed signal
-            if (g_peak[b] < g_mem[b]) g_peak[b] = g_mem[b];
-            if (g_peak[b] < 0.0f) g_peak[b] = 0.0f;
+        }
+        g_prev[b] = val;
+
+        // (b) Integral smoothing: IIR accumulator (cava's integral filter).
+        //     mem = mem * NR + input.  Amplifies sustained signals ~4.3x,
+        //     provides smooth exponential decay when input drops.
+        val = g_mem[b] * NOISE_REDUCTION + val;
+        g_mem[b] = val;
+
+        // Overshoot on post-integral value (cava checks here).
+        if (val > 1.0f) {
+            overshoot = true;
+            val = 1.0f;
         }
 
-        bars[b] = std::min(g_peak[b], 1.0f);
+        bars[b] = val;
     }
 
     // 6. Auto-sensitivity (cava-style):
-    //    overshoot -> gently reduce.  Quiet -> slowly grow.
-    //    sensInit ramps fast until first overshoot OR sens exceeds cap.
-    //    sensInit boost only fires when audioMax > SENS_INIT_AUDIO_GATE
-    //    so PA warmup noise (amplitude ~1e-6) doesn't trigger the ramp.
+    //    overshoot -> reduce (0.98x) and disable sensInit permanently.
+    //    quiet (non-silent) -> slowly grow (1.001x).
+    //    sensInit ramps fast (1.1x) until first overshoot or cap.
     if (overshoot) {
         g_sens *= SENS_ATTACK;
         g_sensInit = false;
     } else if (!silence) {
         g_sens *= SENS_RELEASE;
         if (g_sensInit) {
-            if (audioMax > SENS_INIT_AUDIO_GATE)
-                g_sens *= SENS_INIT_BOOST;
+            g_sens *= SENS_INIT_BOOST;
             if (g_sens > SENS_INIT_CAP)
                 g_sensInit = false;
         }
