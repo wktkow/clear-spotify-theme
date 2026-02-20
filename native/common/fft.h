@@ -64,11 +64,15 @@ static bool  g_binsReady = false;
 
 static void ensureBins() {
     if (g_binsReady) return;
-    // Map BAR_COUNT bars to logarithmically-spaced frequency ranges
-    // from FREQ_MIN to FREQ_MAX.
+    // Weighted log scale: (i/N)^FREQ_CURVE squishes more bars into the
+    // low/mid range where most musical content lives. FREQ_CURVE=1.5
+    // means ~2/3 of bars cover the sub-2kHz range.
+    float ratio = FREQ_MAX / FREQ_MIN;
     for (int i = 0; i < BAR_COUNT; i++) {
-        float fLo = FREQ_MIN * powf(FREQ_MAX / FREQ_MIN, (float)i / BAR_COUNT);
-        float fHi = FREQ_MIN * powf(FREQ_MAX / FREQ_MIN, (float)(i + 1) / BAR_COUNT);
+        float tLo = powf((float)i / BAR_COUNT, FREQ_CURVE);
+        float tHi = powf((float)(i + 1) / BAR_COUNT, FREQ_CURVE);
+        float fLo = FREQ_MIN * powf(ratio, tLo);
+        float fHi = FREQ_MIN * powf(ratio, tHi);
         g_binLo[i] = (int)(fLo * FFT_SIZE / SAMPLE_RATE);
         g_binHi[i] = (int)(fHi * FFT_SIZE / SAMPLE_RATE);
         if (g_binLo[i] < 1) g_binLo[i] = 1;
@@ -101,18 +105,17 @@ static void computeBars(const float* samples, float* bars) {
     }
 
     for (int b = 0; b < BAR_COUNT; b++) {
-        float sum = 0.0f;
-        int count = 0;
+        // Use peak magnitude in each bin range — punchier than average,
+        // picks up transients (kick drums, snares) much better.
+        float peak = 0.0f;
         for (int k = g_binLo[b]; k <= g_binHi[b]; k++) {
-            sum += mag[k];
-            count++;
+            if (mag[k] > peak) peak = mag[k];
         }
-        float avg = (count > 0) ? sum / count : 0.0f;
 
         // Convert to dB scale, normalize to 0-1 range.
-        // Reference: -60dB floor, 0dB = max amplitude.
-        float db = 20.0f * log10f(avg / (FFT_SIZE * 0.5f) + 1e-10f);
-        float norm = (db + 60.0f) / 60.0f;
+        // -50dB floor (tighter than -60dB) keeps bars more responsive.
+        float db = 20.0f * log10f(peak / (FFT_SIZE * 0.5f) + 1e-10f);
+        float norm = (db + 50.0f) / 50.0f;
         if (norm < 0.0f) norm = 0.0f;
         if (norm > 1.0f) norm = 1.0f;
         bars[b] = norm;

@@ -877,10 +877,7 @@
       ws.onclose = () => {
         wsConnected = false;
         if (active) {
-          showMessage(
-            "Audio bridge disconnected",
-            "Reconnecting...",
-          );
+          showMessage("Audio bridge disconnected", "Reconnecting...");
           reconnectTimer = setTimeout(connectWs, WS_RECONNECT_MS);
         }
       };
@@ -1020,12 +1017,13 @@
       const H = canvas.height;
 
       // Smooth bars toward live WebSocket data
+      // Rise fast (0.7) for snappy attack, fall moderate (0.3) for bounce
       for (let i = 0; i < BAR_COUNT; i++) {
         const target = wsData[i];
         if (target > displayBars[i]) {
-          displayBars[i] += (target - displayBars[i]) * 0.5;
+          displayBars[i] += (target - displayBars[i]) * 0.7;
         } else {
-          displayBars[i] += (target - displayBars[i]) * 0.15;
+          displayBars[i] += (target - displayBars[i]) * 0.3;
         }
       }
 

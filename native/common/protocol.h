@@ -8,7 +8,8 @@ constexpr int    BAR_COUNT   = 24;
 constexpr int    FFT_SIZE    = 2048;
 constexpr int    SAMPLE_RATE = 44100;
 constexpr int    SEND_FPS    = 60;
-constexpr float  FREQ_MIN    = 20.0f;
-constexpr float  FREQ_MAX    = 20000.0f;
+constexpr float  FREQ_MIN    = 30.0f;
+constexpr float  FREQ_MAX    = 14000.0f;
+constexpr float  FREQ_CURVE  = 1.5f;   // >1 = more bars for low freqs
 
 #endif // VIS_PROTOCOL_H
