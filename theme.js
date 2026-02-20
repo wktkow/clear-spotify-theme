@@ -1084,9 +1084,7 @@
   initVisualizer();
 
   // --- Fade out startup splash (wait for full page load + images) ---
-  if (
-    loadSettings().splashScreen !== false
-  ) {
+  if (loadSettings().splashScreen !== false) {
     if (document.readyState !== "complete") {
       await new Promise((resolve) =>
         window.addEventListener("load", resolve, { once: true }),

@@ -1,6 +1,6 @@
-# Clear
+# Clear Spotify Client
 
-Opinionated Spotify theme reducing screen clutter and improving readability
+Opinionated Spotify client reducing screen clutter and improving readability.
 
 ![Screenshot](images/screenshot1.png)
 
@@ -14,21 +14,9 @@ Opinionated Spotify theme reducing screen clutter and improving readability
 
 ## Installation
 
-### On Linux:
-
-1. Make sure you have [spicetify](https://spicetify.app/) installed.
-
-2. Run the installer:
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/wktkow/clear-spotify-theme/main/sh/install.sh | bash
-   ```
-
-   (Detects existing install, fully removes it, downloads fresh theme files, applies, and launches Spotify)
-
-3. Enjoy!
-
 ### On Windows:
+
+0. Important: make sure you have spotify installed already and you are logged in.
 
 1. Open Powershell as administrator
 
@@ -49,6 +37,10 @@ iwr -useb https://raw.githubusercontent.com/wktkow/clear-spotify-theme/main/powe
 (Installs [Clear Spotify](https://github.com/wktkow/clear-spotify-theme) — detects existing install, fully removes it, downloads fresh theme files, applies, and launches Spotify)
 
 4. Enjoy!
+
+### On Linux:
+
+[click here](/docs/linux-install.md)
 
 ## Potential Roadmap
 
