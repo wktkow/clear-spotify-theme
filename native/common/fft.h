@@ -13,19 +13,16 @@
 
 // ---- Tuning constants (matched to cava defaults) ----
 
-// Asymmetric EMA smoothing factors.
-// Release (falling bars): standard EMA with NOISE_REDUCTION = 0.77.
-// Attack (rising bars): fast EMA with ATTACK_SMOOTH = 0.3.
-// EMA form (gain = 1.0) replaces the old IIR accumulator (gain ~4.35)
-// which caused mem to overshoot well above 1.0, keeping bars clamped
-// at the display ceiling for 300-400ms after each peak.
+// Asymmetric smoothing: instant attack (mem snaps to raw on rise),
+// pure exponential decay on fall (mem *= NOISE_REDUCTION).
+// This matches cava's integral filter exactly.
 constexpr float NOISE_REDUCTION = 0.77f;
-constexpr float ATTACK_SMOOTH   = 0.3f;
 
-// Gravity: accelerating fall when signal drops.
-// Cava uses step=0.028, mod = 1.54/NR ~ 2.0 at 60fps.
-constexpr float GRAVITY_STEP    = 0.028f;
-constexpr float GRAVITY_MOD     = 1.54f / NOISE_REDUCTION;
+// Gravity: subtraction-based accelerating fall from peak.
+// peak -= GRAVITY * velocity; velocity += GRAVITY;
+// With GRAVITY=0.08 a bar falls from 1.0 to 0 in ~18 frames (300ms).
+// This replaces the old multiplicative formula which decayed too slowly.
+constexpr float GRAVITY         = 0.08f;
 
 // Auto-sensitivity (global gain).
 // attack 0.98 per frame on overshoot, release 1.001 per frame.
@@ -94,10 +91,9 @@ static float g_window[FFT_SIZE];        // Hann window (full FFT buffer)
 static int   g_binLo[BAR_COUNT];        // FFT bin lower bound per bar
 static int   g_binHi[BAR_COUNT];        // FFT bin upper bound per bar
 static float g_eq[BAR_COUNT];           // per-bar EQ weight
-static float g_mem[BAR_COUNT];          // integral smoothing memory
+static float g_mem[BAR_COUNT];          // smoothing memory
 static float g_peak[BAR_COUNT];         // gravity peak tracker
 static float g_fall[BAR_COUNT];         // gravity fall velocity
-static float g_prevOut[BAR_COUNT];      // previous frame output (for gravity)
 static float g_sens;                    // auto-sensitivity (global gain)
 static bool  g_sensInit;                // fast initial ramp-up active
 static bool  g_inited = false;
@@ -137,7 +133,6 @@ static void initProcessor() {
     memset(g_mem, 0, sizeof(g_mem));
     memset(g_peak, 0, sizeof(g_peak));
     memset(g_fall, 0, sizeof(g_fall));
-    memset(g_prevOut, 0, sizeof(g_prevOut));
     g_sens = SENS_INIT;
     g_sensInit = true;
     g_inited = true;
@@ -195,36 +190,40 @@ static void processFrame(const float* newSamples, float* bars) {
         rawBars[b] = sqrtf(norm) * g_eq[b] * g_sens;
     }
 
-    // 5. Gravity + asymmetric EMA smoothing (cava gravity order)
+    // 5. Smoothing + gravity (matches cava's actual pipeline).
+    //    Order: (a) instant-attack / exponential-decay smoothing on raw,
+    //           (b) gravity on the smoothed output.
+    //    The old code applied gravity BEFORE EMA, causing double-smoothing
+    //    that kept bars visually stuck at peak for 400ms.
     bool overshoot = false;
     for (int b = 0; b < BAR_COUNT; b++) {
-        // Gravity: accelerating fall when signal drops
-        if (rawBars[b] < g_prevOut[b]) {
-            rawBars[b] = g_peak[b] * (1.0f - g_fall[b] * g_fall[b] * GRAVITY_MOD);
-            if (rawBars[b] < 0.0f) rawBars[b] = 0.0f;
-            g_fall[b] += GRAVITY_STEP;
+        float raw = rawBars[b];
+
+        // (a) Cava-style smoothing: snap up instantly, decay exponentially.
+        if (raw > g_mem[b]) {
+            g_mem[b] = raw;
         } else {
-            g_peak[b] = rawBars[b];
+            g_mem[b] *= NOISE_REDUCTION;
+        }
+
+        // Overshoot detection for auto-sensitivity.
+        if (g_mem[b] > 1.0f) overshoot = true;
+
+        // (b) Gravity: accelerating fall from peak (subtraction form).
+        //     peak -= GRAVITY * velocity; velocity += GRAVITY;
+        //     Gives a smooth parabolic fall over ~300ms.
+        if (g_mem[b] >= g_peak[b]) {
+            g_peak[b] = g_mem[b];
             g_fall[b] = 0.0f;
-        }
-        g_prevOut[b] = rawBars[b];
-
-        // Overshoot on pre-EMA gravity output tells autosens to back off.
-        if (rawBars[b] > 1.0f) overshoot = true;
-
-        // Asymmetric EMA: fast attack (beats stay punchy), slow release
-        // (smooth cava-like decay).  Input capped at 1.0 so mem can never
-        // exceed 1.0 — eliminates the multi-hundred-ms lockup that the
-        // old accumulation IIR (gain ~4.35) caused at peak values.
-        float target = std::min(rawBars[b], 1.0f);
-        if (target > g_mem[b]) {
-            rawBars[b] = g_mem[b] * ATTACK_SMOOTH + target * (1.0f - ATTACK_SMOOTH);
         } else {
-            rawBars[b] = g_mem[b] * NOISE_REDUCTION + target * (1.0f - NOISE_REDUCTION);
+            g_peak[b] -= GRAVITY * g_fall[b];
+            g_fall[b] += GRAVITY;
+            // Peak can't go below the smoothed signal
+            if (g_peak[b] < g_mem[b]) g_peak[b] = g_mem[b];
+            if (g_peak[b] < 0.0f) g_peak[b] = 0.0f;
         }
-        g_mem[b] = rawBars[b];
 
-        bars[b] = rawBars[b];
+        bars[b] = std::min(g_peak[b], 1.0f);
     }
 
     // 6. Auto-sensitivity (cava-style):
