@@ -152,6 +152,15 @@ public:
         sock_t s = accept(listenSock, (struct sockaddr*)&ca, &cl);
         if (s == SOCK_INVALID) return;
 
+        // Client socket must be BLOCKING for reliable WebSocket framing.
+        // (listen socket is non-blocking for polling, but accepted sockets
+        //  inherit that — partial sends would corrupt the WS stream.)
+#ifdef _WIN32
+        { u_long mode = 0; ioctlsocket(s, FIONBIO, &mode); }
+#else
+        { int flags = fcntl(s, F_GETFL, 0); fcntl(s, F_SETFL, flags & ~O_NONBLOCK); }
+#endif
+
         // Read HTTP upgrade request
         char buf[4096];
         int n = recv(s, buf, sizeof(buf)-1, 0);

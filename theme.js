@@ -826,6 +826,7 @@
     let wsConnected = false;
     const wsData = new Float32Array(BAR_COUNT);
     let reconnectTimer = null;
+    let lastMsgTime = 0;
 
     // --- WebSocket connection to native audio capture ---
     function connectWs() {
@@ -858,11 +859,22 @@
         console.log("[VIS] WebSocket connected to audio bridge");
       };
 
-      ws.onmessage = (e) => {
-        if (e.data instanceof ArrayBuffer) {
-          const data = new Float32Array(e.data);
+      ws.onmessage = async (e) => {
+        try {
+          let buf;
+          if (e.data instanceof ArrayBuffer) {
+            buf = e.data;
+          } else if (e.data && typeof e.data.arrayBuffer === "function") {
+            buf = await e.data.arrayBuffer();
+          } else {
+            return;
+          }
+          const data = new Float32Array(buf);
           const len = Math.min(BAR_COUNT, data.length);
           for (let i = 0; i < len; i++) wsData[i] = data[i];
+          lastMsgTime = performance.now();
+        } catch (err) {
+          console.warn("[VIS] onmessage error:", err);
         }
       };
 
@@ -999,6 +1011,11 @@
       if (!active) return;
       animId = requestAnimationFrame(render);
       if (!ctx) return;
+
+      // Zero bars if no data received recently (prevents stale lockup)
+      if (lastMsgTime > 0 && performance.now() - lastMsgTime > 150) {
+        wsData.fill(0);
+      }
 
       resizeCanvas();
       const W = canvas.width;
