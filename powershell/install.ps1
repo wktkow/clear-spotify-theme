@@ -6,6 +6,7 @@
     - Detects spicetify config directory
     - Clears any previous theme and custom code snippets
     - Downloads and installs Clear theme files (user.css, color.ini, theme.js)
+    - Builds/downloads and installs the audio visualizer daemon (vis-capture)
     - Configures spicetify to use the Clear theme
     - Applies the theme
     - Launches Spotify
@@ -162,11 +163,26 @@ try {
 # ── 8. Build and install audio visualizer daemon ─────────────────────────────
 Write-Step "Setting up audio visualizer daemon"
 
-$nativeDir = Join-Path $clearDir "native"
-$nativeCommon = Join-Path $nativeDir "common"
-$nativeWin = Join-Path $nativeDir "windows"
-New-Item -ItemType Directory -Force -Path $nativeCommon | Out-Null
-New-Item -ItemType Directory -Force -Path $nativeWin | Out-Null
+# Permanent install location (survives theme folder wipes)
+$visDir = Join-Path $env:LOCALAPPDATA "ClearVis"
+New-Item -ItemType Directory -Force -Path $visDir | Out-Null
+$visBin = Join-Path $visDir "vis-capture.exe"
+
+# Kill any existing vis-capture so we can replace the binary and free the port
+$oldProcs = Get-Process -Name "vis-capture" -ErrorAction SilentlyContinue
+if ($oldProcs) {
+    $oldProcs | Stop-Process -Force
+    Start-Sleep -Seconds 1
+    Write-Ok "Stopped existing vis-capture"
+}
+
+# Download native source files to a temp build dir
+$buildDir = Join-Path $env:TEMP "clearvis-build"
+if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
+$buildCommon = Join-Path $buildDir "native\common"
+$buildWin = Join-Path $buildDir "native\windows"
+New-Item -ItemType Directory -Force -Path $buildCommon | Out-Null
+New-Item -ItemType Directory -Force -Path $buildWin | Out-Null
 
 $nativeFiles = @(
     "native/common/protocol.h",
@@ -179,7 +195,7 @@ $nativeFiles = @(
 $nativeOk = $true
 foreach ($nf in $nativeFiles) {
     $url  = "$baseUrl/$nf"
-    $dest = Join-Path $clearDir $nf
+    $dest = Join-Path $buildDir $nf
     try {
         Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
     } catch {
@@ -192,57 +208,71 @@ foreach ($nf in $nativeFiles) {
 if ($nativeOk) {
     # Try to build with cl.exe if available
     $clCmd = Get-Command cl -ErrorAction SilentlyContinue
-    $visBin = Join-Path $clearDir "vis-capture.exe"
+    $built = $false
 
     if ($clCmd) {
-        Push-Location $nativeWin
+        Write-Ok "Found cl.exe, building vis-capture..."
+        Push-Location $buildWin
         try {
-            & cl /O2 /EHsc /std:c++17 /Fe:$visBin main.cpp ole32.lib ws2_32.lib 2>$null
-            if (Test-Path $visBin) {
+            & cl /O2 /EHsc /std:c++17 /I"$buildCommon" /Fe:"$visBin" main.cpp ole32.lib ws2_32.lib
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $visBin)) {
                 Write-Ok "vis-capture.exe built successfully"
+                $built = $true
             } else {
-                $nativeOk = $false
+                Write-Warn "cl.exe build failed — see errors above"
             }
         } catch {
-            $nativeOk = $false
+            Write-Warn "cl.exe build failed: $_"
         }
         Pop-Location
-    } else {
-        Write-Warn "cl.exe not found — trying to download pre-built binary"
-        # Try to download a pre-built release binary
+    }
+
+    if (-not $built) {
+        Write-Warn "Trying to download pre-built binary..."
         $relUrl = "https://github.com/$repo/releases/latest/download/vis-capture.exe"
         try {
             Invoke-WebRequest -Uri $relUrl -OutFile $visBin -UseBasicParsing
             if (Test-Path $visBin) {
                 Write-Ok "Downloaded pre-built vis-capture.exe"
-            } else {
-                $nativeOk = $false
+                $built = $true
             }
         } catch {
             Write-Warn "Could not download pre-built binary"
             Write-Warn "Install Visual Studio Build Tools and re-run, or build manually with build.bat"
-            $nativeOk = $false
         }
     }
 
-    if ($nativeOk -and (Test-Path $visBin)) {
-        # Create a startup shortcut so vis-capture runs on login
-        $startupDir = [System.IO.Path]::Combine($env:APPDATA, "Microsoft\Windows\Start Menu\Programs\Startup")
-        $shortcutPath = Join-Path $startupDir "ClearVis.lnk"
+    if ($built -and (Test-Path $visBin)) {
+        # Use Task Scheduler for hidden auto-start (no console window flash)
+        $taskName = "ClearVisCapture"
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($existingTask) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        }
 
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $visBin
-        $shortcut.WindowStyle = 7  # minimized
-        $shortcut.Description = "Clear Spotify Visualizer Audio Bridge"
-        $shortcut.Save()
-        Write-Ok "Added vis-capture to Windows startup"
+        $action  = New-ScheduledTaskAction -Execute $visBin
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-        # Also start it right now
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Clear Spotify Visualizer Audio Bridge" | Out-Null
+        Write-Ok "Registered '$taskName' scheduled task (auto-starts on login)"
+
+        # Remove legacy startup shortcut if present
+        $legacyShortcut = Join-Path ([System.IO.Path]::Combine($env:APPDATA, "Microsoft\Windows\Start Menu\Programs\Startup")) "ClearVis.lnk"
+        if (Test-Path $legacyShortcut) {
+            Remove-Item $legacyShortcut -Force
+            Write-Ok "Removed legacy startup shortcut"
+        }
+
+        # Start it right now
         Start-Process -FilePath $visBin -WindowStyle Hidden
         Write-Ok "vis-capture started"
     }
 }
+
+# Clean up build dir
+if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
 
 # ── 9. Launch Spotify ────────────────────────────────────────────────────────
 Write-Step "Launching Spotify"

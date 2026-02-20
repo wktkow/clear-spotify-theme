@@ -1,7 +1,8 @@
 #!/bin/bash
 # Clear Spotify Theme — Linux installer
 # Kills Spotify, clears previous theme/snippets, downloads files, applies, launches.
-# Requires: spicetify, curl
+# Also builds and installs the audio visualizer daemon (vis-capture).
+# Requires: spicetify, curl, g++, libpulse-dev (for visualizer)
 
 set -euo pipefail
 
@@ -188,6 +189,11 @@ elif ! pkg-config --exists libpulse-simple 2>/dev/null; then
     yellow "libpulse-dev not found — skipping visualizer daemon build"
     yellow "Install with: sudo apt install libpulse-dev  (or equivalent)"
 else
+    # Stop old daemon if present (frees port 7700 for new one)
+    systemctl --user stop clear-vis.service 2>/dev/null || true
+    pkill -f vis-capture 2>/dev/null || true
+    sleep 0.3
+
     # Download native source files
     BUILD_DIR=$(mktemp -d)
     mkdir -p "$BUILD_DIR/native/common" "$BUILD_DIR/native/linux"
@@ -205,7 +211,7 @@ else
 
     if $native_ok; then
         # Build
-        if (cd "$BUILD_DIR/native/linux" && make -j"$(nproc)" 2>/dev/null); then
+        if (cd "$BUILD_DIR/native/linux" && make -j"$(nproc)"); then
             green "vis-capture built successfully"
 
             # Install binary
@@ -219,10 +225,10 @@ else
             cp "$BUILD_DIR/native/linux/clear-vis.service" "$HOME/.config/systemd/user/"
             systemctl --user daemon-reload
             systemctl --user enable clear-vis.service
-            systemctl --user restart clear-vis.service
+            systemctl --user start clear-vis.service
             green "Enabled clear-vis systemd user service (auto-starts on login)"
         else
-            yellow "vis-capture build failed — visualizer will not work"
+            red "vis-capture build failed — see errors above"
             yellow "You can build manually: cd native/linux && make"
         fi
     fi
