@@ -1,7 +1,8 @@
 #!/bin/bash
 # Clear Spotify Theme — Linux installer
-# Kills Spotify, clears previous theme/snippets, downloads files, applies, launches.
-# Also builds and installs the audio visualizer daemon (vis-capture).
+# Detects existing installation and fully removes it before a clean reinstall.
+# Kills Spotify, restores vanilla state, downloads fresh theme files, applies,
+# builds the audio visualizer daemon (vis-capture), and launches Spotify.
 # Requires: spicetify, curl, g++, libpulse-dev (for visualizer)
 
 set -euo pipefail
@@ -115,22 +116,41 @@ if [[ ! -d "$INSTALL_DIR" ]]; then
     exit 1
 fi
 
-# ── 4. Clear previous theme and code snippets ───────────────────────────────
-cyan "Cleaning previous installation"
+# ── 4. Detect and fully remove previous installation ────────────────────────
+cyan "Checking for existing Clear installation"
 
-if [[ -d "$INSTALL_DIR" ]] && ls "$INSTALL_DIR"/* &>/dev/null 2>&1; then
-    rm -rf "${INSTALL_DIR:?}"/*
-    green "Cleared old $THEME_NAME theme files"
+# Check if Clear was previously applied
+PREVIOUS_THEME=$(spicetify config current_theme 2>/dev/null || true)
+if [[ "$PREVIOUS_THEME" == *"$THEME_NAME"* ]] || [[ -d "$INSTALL_DIR" ]]; then
+    yellow "Existing Clear installation detected — removing completely"
+
+    # Restore Spotify to vanilla (undoes any previous spicetify apply)
+    if spicetify restore 2>/dev/null; then
+        green "Restored Spotify to vanilla state"
+    else
+        yellow "spicetify restore returned non-zero (may already be vanilla)"
+    fi
+
+    # Nuke the entire theme directory
+    if [[ -d "$INSTALL_DIR" ]]; then
+        rm -rf "${INSTALL_DIR:?}"
+        green "Removed $INSTALL_DIR"
+    fi
+
+    # Reset spicetify config to defaults
+    spicetify config current_theme "" 2>/dev/null || true
+    spicetify config inject_theme_js 0 2>/dev/null || true
+    spicetify config color_scheme "" 2>/dev/null || true
+    spicetify config extensions "" 2>/dev/null || true
+    green "Reset spicetify configuration"
 else
-    green "No previous $THEME_NAME files found"
+    green "No previous $THEME_NAME installation found"
 fi
 
-# Reset spicetify config to clear stale snippet references
+# Make sure config file exists
 if [[ -n "$SPICETIFY_DIR" ]]; then
     CONFIG_INI="$SPICETIFY_DIR/config-xpui.ini"
-    if [[ -f "$CONFIG_INI" ]]; then
-        green "Config file found, will be updated by spicetify config"
-    else
+    if [[ ! -f "$CONFIG_INI" ]]; then
         yellow "No config-xpui.ini found — running spicetify to generate it"
         spicetify &>/dev/null || true
     fi
@@ -138,6 +158,7 @@ fi
 
 # ── 5. Download theme files ─────────────────────────────────────────────────
 cyan "Downloading $THEME_NAME theme files"
+mkdir -p "$INSTALL_DIR"
 
 for file in "${THEME_FILES[@]}"; do
     url="$BASE_URL/$file"

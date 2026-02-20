@@ -12,7 +12,7 @@ Opinionated Spotify theme reducing screen clutter and improving readability
 
 ![Embeded Audio Visualizer](images/visualizer.png)
 
-## Installation (Desktop App)
+## Installation
 
 ### On Linux:
 
@@ -24,7 +24,7 @@ Opinionated Spotify theme reducing screen clutter and improving readability
    curl -fsSL https://raw.githubusercontent.com/wktkow/clear-spotify-theme/main/sh/install.sh | bash
    ```
 
-   (Kills Spotify, clears any previous theme/snippets, downloads theme files, applies, and launches Spotify)
+   (Detects existing install, fully removes it, downloads fresh theme files, applies, and launches Spotify)
 
 3. Enjoy!
 
@@ -46,7 +46,7 @@ iwr -useb https://raw.githubusercontent.com/spicetify/cli/main/install.ps1 | iex
 iwr -useb https://raw.githubusercontent.com/wktkow/clear-spotify-theme/main/powershell/install.ps1 | iex
 ```
 
-(Installs [Clear Spotify](https://github.com/wktkow/clear-spotify-theme) — kills Spotify, clears any previous theme/snippets, downloads theme files, applies, and launches Spotify)
+(Installs [Clear Spotify](https://github.com/wktkow/clear-spotify-theme) — detects existing install, fully removes it, downloads fresh theme files, applies, and launches Spotify)
 
 4. Enjoy!
 

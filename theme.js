@@ -1,7 +1,4 @@
 (async () => {
-  // Chrome extension guard – exit if disabled by login guard
-  if (window.__clearExtensionDisabled) return;
-
   // Early splash disable – hide overlay before UI even loads.
   // At document_start body may not exist yet, so wait for it.
   try {
@@ -1087,10 +1084,8 @@
   initVisualizer();
 
   // --- Fade out startup splash (wait for full page load + images) ---
-  // Splash is desktop-only; Chrome extension sets __clearExtensionNoSplash.
   if (
-    loadSettings().splashScreen !== false &&
-    !window.__clearExtensionNoSplash
+    loadSettings().splashScreen !== false
   ) {
     if (document.readyState !== "complete") {
       await new Promise((resolve) =>

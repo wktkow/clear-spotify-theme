@@ -2,9 +2,6 @@
 
 ## In Progress
 
-- Make the chrome extension actually work
-- Bring back splash screen to chrome extension
-
 ## UI / UX
 
 - Make a better homepage instead of nuking it

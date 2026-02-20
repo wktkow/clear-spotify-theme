@@ -2,9 +2,9 @@
 .SYNOPSIS
     Installs the Clear Spotify theme for spicetify on Windows.
 .DESCRIPTION
+    - Detects existing Clear installation and fully removes it
     - Kills Spotify if running
-    - Detects spicetify config directory
-    - Clears any previous theme and custom code snippets
+    - Restores Spotify to vanilla state (undoes previous apply)
     - Downloads and installs Clear theme files (user.css, color.ini, theme.js)
     - Builds/downloads and installs the audio visualizer daemon (vis-capture)
     - Configures spicetify to use the Clear theme
@@ -84,30 +84,45 @@ Write-Ok "Config directory: $spicetifyDir"
 $themesDir = Join-Path $spicetifyDir "Themes"
 $clearDir  = Join-Path $themesDir $themeName
 
-# ── 4. Clear previous theme and code snippets ───────────────────────────────
-Write-Step "Cleaning previous installation"
+# ── 4. Detect and fully remove previous installation ────────────────────────
+Write-Step "Checking for existing Clear installation"
 
-# Remove old Clear theme folder if it exists
-if (Test-Path $clearDir) {
-    Remove-Item -Recurse -Force $clearDir
-    Write-Ok "Removed old $themeName theme folder"
+# Check if Clear was previously applied
+$previousTheme = ""
+try { $previousTheme = & spicetify config current_theme 2>$null } catch {}
+
+$clearExists = (Test-Path $clearDir) -or ($previousTheme -match $themeName)
+if ($clearExists) {
+    Write-Warn "Existing Clear installation detected — removing completely"
+
+    # Restore Spotify to vanilla (undoes any previous spicetify apply)
+    try {
+        & spicetify restore
+        Write-Ok "Restored Spotify to vanilla state"
+    } catch {
+        Write-Warn "spicetify restore returned non-zero (may already be vanilla)"
+    }
+
+    # Nuke the entire theme directory
+    if (Test-Path $clearDir) {
+        Remove-Item -Recurse -Force $clearDir
+        Write-Ok "Removed $clearDir"
+    }
+
+    # Reset spicetify config to defaults
+    try { & spicetify config current_theme "" } catch {}
+    try { & spicetify config inject_theme_js 0 } catch {}
+    try { & spicetify config color_scheme "" } catch {}
+    try { & spicetify config extensions "" } catch {}
+    Write-Ok "Reset spicetify configuration"
 } else {
-    Write-Ok "No previous $themeName theme found"
+    Write-Ok "No previous $themeName installation found"
 }
 
-# Clear custom extensions/apps that spicetify may have injected from old themes
+# Make sure config exists
 $configIni = Join-Path $spicetifyDir "config-xpui.ini"
-if (Test-Path $configIni) {
-    # Read current config to clear stale snippet references
-    $configContent = Get-Content $configIni -Raw
-
-    # Reset extensions and custom_apps lines that reference old theme JS
-    # We don't nuke all extensions — just clear any theme-specific ones
-    # spicetify config will set the correct ones below
-    Write-Ok "Config file found, will be updated by spicetify config"
-} else {
-    Write-Warn "No config-xpui.ini found — spicetify may not have been initialized"
-    Write-Warn "Running spicetify once to generate config..."
+if (-not (Test-Path $configIni)) {
+    Write-Warn "No config-xpui.ini found — running spicetify to generate it"
     try { & spicetify 2>$null } catch {}
 }
 
