@@ -15,9 +15,11 @@ Opinionated spicetify theme reducing screen clutter and improving readability
 1. Make sure you have [spicetify](https://spicetify.app/) installed.
 
 2. Run the installer:
+
    ```bash
    curl -fsSL https://raw.githubusercontent.com/wktkow/clear-spotify-theme/main/sh/install.sh | bash
    ```
+
    (Kills Spotify, clears any previous theme/snippets, downloads theme files, applies, and launches Spotify)
 
 3. Enjoy!
