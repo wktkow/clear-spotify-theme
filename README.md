@@ -46,6 +46,10 @@ iwr -useb https://raw.githubusercontent.com/wktkow/clear-spotify-theme/main/powe
 
 4. Enjoy!
 
+## Potential Roadmap
+
+I will get to it when im bored again (on average takes about ~ 1 year). [Future Features](docs/todo.md)
+
 ## Initial Sources
 
 Clear is based on code from various external sources. You can see the full list
