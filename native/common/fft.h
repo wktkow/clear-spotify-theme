@@ -1,6 +1,8 @@
 // fft.h — Audio processor for the Spotify visualizer.
-// Fresh-frame FFT (zero-padded), log-frequency binning, auto-gain control,
-// and gravity smoothing.  Header-only, no external dependencies.
+// Sliding-window FFT, log-frequency binning, per-bar EQ,
+// auto-sensitivity, integral smoothing, and gravity falloff.
+// Closely follows cava's signal processing pipeline.
+// Header-only, no external dependencies.
 #ifndef VIS_FFT_H
 #define VIS_FFT_H
 
@@ -9,13 +11,34 @@
 #include <algorithm>
 #include "protocol.h"
 
-// ---- Tuning constants ----
-constexpr float GRAVITY      = 0.04f;   // per-frame fall acceleration
-constexpr float SENSITIVITY  = 8.0f;    // base amplification
-constexpr float AGC_ATTACK   = 0.85f;   // shrink gain when too loud (fast)
-constexpr float AGC_RELEASE  = 1.002f;  // grow gain when too quiet (slow)
-constexpr float AGC_MIN      = 0.5f;
-constexpr float AGC_MAX      = 15.0f;
+// ---- Tuning constants (matched to cava defaults) ----
+
+// Temporal IIR smoothing factor.  Each bar's output is accumulated as:
+//   out = mem * NR + raw;  mem = out;
+// Steady-state gain ~ 1/(1-NR).  Higher = smoother but laggier.
+// Cava default: 0.77.
+constexpr float NOISE_REDUCTION = 0.77f;
+
+// Gravity: accelerating fall when signal drops.
+// Cava uses step=0.028, mod = 1.54/NR ~ 2.0 at 60fps.
+constexpr float GRAVITY_STEP    = 0.028f;
+constexpr float GRAVITY_MOD     = 1.54f / NOISE_REDUCTION;
+
+// Auto-sensitivity (global gain).
+// Cava: attack 0.98 per frame on overshoot, release 1.001 per frame.
+// sens_init mode ramps fast (1.1x/frame) until first overshoot.
+constexpr float SENS_INIT       = 1.0f;
+constexpr float SENS_ATTACK     = 0.98f;
+constexpr float SENS_RELEASE    = 1.002f;
+constexpr float SENS_INIT_BOOST = 1.1f;
+constexpr float SENS_MIN        = 0.02f;
+constexpr float SENS_MAX        = 100.0f;
+
+// Per-bar EQ: pow(freq/FREQ_MIN, EQ_POWER).
+// Boosts high-frequency bars to compensate for music having more
+// energy in bass.  Combined with sqrt() normalization, 0.5 produces
+// nearly flat response across all bars for broadband audio.
+constexpr float EQ_POWER        = 0.5f;
 
 // ---- Complex helpers ----
 struct Complex { float re, im; };
@@ -56,119 +79,141 @@ static void fft(Complex* buf, int n) {
 }
 
 // ---- Processor state ----
-static float g_frameWin[FRAME_SAMPLES]; // Hanning window for one frame of audio
-static int   g_binLo[BAR_COUNT];
-static int   g_binHi[BAR_COUNT];
-static float g_smoothBars[BAR_COUNT];   // gravity-smoothed output
-static float g_velocity[BAR_COUNT];     // per-bar fall velocity
-static float g_gain;                    // auto-gain multiplier
+static float g_inputBuf[FFT_SIZE];      // sliding window of real audio
+static float g_window[FFT_SIZE];        // Hann window (full FFT buffer)
+static int   g_binLo[BAR_COUNT];        // FFT bin lower bound per bar
+static int   g_binHi[BAR_COUNT];        // FFT bin upper bound per bar
+static float g_eq[BAR_COUNT];           // per-bar EQ weight
+static float g_mem[BAR_COUNT];          // integral smoothing memory
+static float g_peak[BAR_COUNT];         // gravity peak tracker
+static float g_fall[BAR_COUNT];         // gravity fall velocity
+static float g_prevOut[BAR_COUNT];      // previous frame output (for gravity)
+static float g_sens;                    // auto-sensitivity (global gain)
+static bool  g_sensInit;                // fast initial ramp-up active
 static bool  g_inited = false;
 
 static void initProcessor() {
-    // Hanning window sized to FRAME_SAMPLES (not FFT_SIZE!)
-    for (int i = 0; i < FRAME_SAMPLES; i++)
-        g_frameWin[i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * i / (FRAME_SAMPLES - 1)));
+    // Hann window sized to full FFT buffer
+    for (int i = 0; i < FFT_SIZE; i++)
+        g_window[i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * i / (FFT_SIZE - 1)));
 
-    // Log-spaced frequency bin edges
+    // Log-spaced frequency bin cutoffs
     float logMin = log10f(FREQ_MIN);
     float logMax = log10f(FREQ_MAX);
+    int loCut[BAR_COUNT + 1];
+    for (int i = 0; i <= BAR_COUNT; i++) {
+        float f = powf(10.0f, logMin + (float)i / BAR_COUNT * (logMax - logMin));
+        loCut[i] = std::max(1, (int)roundf(f * FFT_SIZE / SAMPLE_RATE));
+    }
+    // Push up to guarantee each bar has at least 1 unique FFT bin (cava approach)
+    for (int i = 1; i <= BAR_COUNT; i++) {
+        if (loCut[i] <= loCut[i - 1])
+            loCut[i] = loCut[i - 1] + 1;
+    }
     for (int i = 0; i < BAR_COUNT; i++) {
-        float fLo = powf(10.0f, logMin + (float)i / BAR_COUNT * (logMax - logMin));
-        float fHi = powf(10.0f, logMin + (float)(i + 1) / BAR_COUNT * (logMax - logMin));
-        g_binLo[i] = std::max(1, (int)(fLo * FFT_SIZE / SAMPLE_RATE));
-        g_binHi[i] = std::min(FFT_SIZE / 2 - 1, (int)(fHi * FFT_SIZE / SAMPLE_RATE));
-        if (g_binHi[i] < g_binLo[i]) g_binHi[i] = g_binLo[i];
+        g_binLo[i] = loCut[i];
+        g_binHi[i] = std::max(loCut[i], loCut[i + 1] - 1);
+        g_binHi[i] = std::min(g_binHi[i], FFT_SIZE / 2 - 1);
     }
 
-    memset(g_smoothBars, 0, sizeof(g_smoothBars));
-    memset(g_velocity, 0, sizeof(g_velocity));
-    g_gain = SENSITIVITY;
+    // Per-bar EQ: boost higher frequencies to balance typical music spectrum
+    for (int i = 0; i < BAR_COUNT; i++) {
+        float fCenter = (float)(g_binLo[i] + g_binHi[i]) * 0.5f
+                        * (float)SAMPLE_RATE / (float)FFT_SIZE;
+        g_eq[i] = powf(std::max(fCenter, (float)FREQ_MIN) / (float)FREQ_MIN, EQ_POWER);
+    }
+
+    memset(g_inputBuf, 0, sizeof(g_inputBuf));
+    memset(g_mem, 0, sizeof(g_mem));
+    memset(g_peak, 0, sizeof(g_peak));
+    memset(g_fall, 0, sizeof(g_fall));
+    memset(g_prevOut, 0, sizeof(g_prevOut));
+    g_sens = SENS_INIT;
+    g_sensInit = true;
     g_inited = true;
 }
 
 // Process one frame of FRAME_SAMPLES fresh audio.
-// Window + zero-pad to FFT_SIZE → each frame is 100% new data.
+// Maintains a sliding window of FFT_SIZE samples (all real audio, no zero-padding).
 // Output: bars[BAR_COUNT] in [0, 1].
 static void processFrame(const float* newSamples, float* bars) {
     if (!g_inited) initProcessor();
 
-    // 1. Window fresh samples, zero-pad rest → FFT input is fully fresh
+    // 1. Sliding window: shift left by FRAME_SAMPLES, append new audio.
+    //    The entire buffer contains real audio — no zero-padding.
+    memmove(g_inputBuf, g_inputBuf + FRAME_SAMPLES,
+            (FFT_SIZE - FRAME_SAMPLES) * sizeof(float));
+    memcpy(g_inputBuf + (FFT_SIZE - FRAME_SAMPLES), newSamples,
+           FRAME_SAMPLES * sizeof(float));
+
+    // 2. Hann window over full buffer -> FFT
     static Complex fftBuf[FFT_SIZE];
-    for (int i = 0; i < FRAME_SAMPLES; i++) {
-        fftBuf[i].re = newSamples[i] * g_frameWin[i];
-        fftBuf[i].im = 0.0f;
-    }
-    for (int i = FRAME_SAMPLES; i < FFT_SIZE; i++) {
-        fftBuf[i].re = 0.0f;
+    for (int i = 0; i < FFT_SIZE; i++) {
+        fftBuf[i].re = g_inputBuf[i] * g_window[i];
         fftBuf[i].im = 0.0f;
     }
     fft(fftBuf, FFT_SIZE);
 
-    // 2. Magnitude spectrum
+    // 3. Magnitude spectrum
     static float mag[FFT_SIZE / 2];
     for (int i = 0; i < FFT_SIZE / 2; i++)
         mag[i] = sqrtf(fftBuf[i].re * fftBuf[i].re + fftBuf[i].im * fftBuf[i].im);
 
-    // 3. Bin into bars (average magnitude per frequency range)
+    // 4. Bin into bars: average magnitude per frequency range, normalize, EQ
     float rawBars[BAR_COUNT];
+    bool silence = true;
     for (int b = 0; b < BAR_COUNT; b++) {
         float sum = 0.0f;
-        int count = 0;
-        for (int k = g_binLo[b]; k <= g_binHi[b]; k++) {
+        int count = g_binHi[b] - g_binLo[b] + 1;
+        for (int k = g_binLo[b]; k <= g_binHi[b]; k++)
             sum += mag[k];
-            count++;
-        }
-        rawBars[b] = count > 0 ? sum / count : 0.0f;
+        float avg = count > 0 ? sum / count : 0.0f;
+
+        // Normalize by FFT size, sqrt compression, per-bar EQ, global sensitivity
+        float norm = avg / (FFT_SIZE * 0.5f);
+        rawBars[b] = sqrtf(norm) * g_eq[b] * g_sens;
+
+        if (rawBars[b] > 0.001f) silence = false;
     }
 
-    // 4. Normalize and apply gain + sqrt perceptual scaling
-    float rawPeak = 0.0f;
+    // 5. Gravity + integral smoothing + clamping (cava order)
+    bool overshoot = false;
     for (int b = 0; b < BAR_COUNT; b++) {
-        // Normalize by FRAME_SAMPLES (the actual signal length, not FFT_SIZE)
-        float norm = rawBars[b] / (FRAME_SAMPLES * 0.5f);
-        rawBars[b] = sqrtf(norm) * g_gain;
-        if (rawBars[b] > rawPeak) rawPeak = rawBars[b];
-    }
-
-    // 5. AGC on raw signal — adapts to any volume level
-    if (rawPeak > 1.0f) {
-        g_gain *= AGC_ATTACK;
-    } else if (rawPeak > 0.001f && rawPeak < 0.4f) {
-        g_gain *= AGC_RELEASE;
-    } else if (rawPeak <= 0.001f) {
-        g_gain += (SENSITIVITY - g_gain) * 0.01f;
-    }
-    g_gain = std::max(AGC_MIN, std::min(AGC_MAX, g_gain));
-
-    // 6. Clamp to [0, 1]
-    for (int b = 0; b < BAR_COUNT; b++)
-        rawBars[b] = std::max(0.0f, std::min(1.0f, rawBars[b]));
-
-    // 7. Inter-bar smoothing (reduces single-bin noise spikes)
-    {
-        float tmp[BAR_COUNT];
-        tmp[0] = rawBars[0] * 0.7f + rawBars[1] * 0.3f;
-        for (int b = 1; b < BAR_COUNT - 1; b++)
-            tmp[b] = rawBars[b - 1] * 0.15f + rawBars[b] * 0.7f + rawBars[b + 1] * 0.15f;
-        tmp[BAR_COUNT - 1] = rawBars[BAR_COUNT - 2] * 0.3f + rawBars[BAR_COUNT - 1] * 0.7f;
-        memcpy(rawBars, tmp, sizeof(rawBars));
-    }
-
-    // 8. Gravity: instant attack, accelerating fall
-    for (int b = 0; b < BAR_COUNT; b++) {
-        if (rawBars[b] >= g_smoothBars[b]) {
-            g_smoothBars[b] = rawBars[b];
-            g_velocity[b] = 0.0f;
+        // Gravity: accelerating fall when signal drops
+        if (rawBars[b] < g_prevOut[b]) {
+            rawBars[b] = g_peak[b] * (1.0f - g_fall[b] * g_fall[b] * GRAVITY_MOD);
+            if (rawBars[b] < 0.0f) rawBars[b] = 0.0f;
+            g_fall[b] += GRAVITY_STEP;
         } else {
-            g_velocity[b] += GRAVITY;
-            g_smoothBars[b] -= g_velocity[b];
-            if (g_smoothBars[b] < 0.0f) g_smoothBars[b] = 0.0f;
+            g_peak[b] = rawBars[b];
+            g_fall[b] = 0.0f;
         }
+        g_prevOut[b] = rawBars[b];
+
+        // Integral smoothing (temporal IIR low-pass filter).
+        // This is the single most important anti-jitter measure.
+        // Accumulates: out = mem * NR + raw.  Steady-state gain ~ 1/(1-NR).
+        rawBars[b] = g_mem[b] * NOISE_REDUCTION + rawBars[b];
+        g_mem[b] = rawBars[b];
+
+        // Clamp to [0, 1]
+        if (rawBars[b] > 1.0f) { overshoot = true; rawBars[b] = 1.0f; }
+        if (rawBars[b] < 0.0f) rawBars[b] = 0.0f;
+
+        bars[b] = rawBars[b];
     }
 
-    // 9. Output
-    for (int b = 0; b < BAR_COUNT; b++)
-        bars[b] = g_smoothBars[b];
+    // 6. Auto-sensitivity (cava-style):
+    //    overshoot -> gently reduce.  Quiet -> slowly grow.
+    //    Initial mode ramps fast (1.1x/frame) until first overshoot.
+    if (overshoot) {
+        g_sens *= SENS_ATTACK;
+        g_sensInit = false;
+    } else if (!silence) {
+        g_sens *= SENS_RELEASE;
+        if (g_sensInit) g_sens *= SENS_INIT_BOOST;
+    }
+    g_sens = std::max(SENS_MIN, std::min(SENS_MAX, g_sens));
 }
 
 #endif // VIS_FFT_H
