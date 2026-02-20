@@ -847,7 +847,7 @@
       precision mediump float;
       varying float v_alpha;
       void main() {
-        gl_FragColor = vec4(v_alpha, v_alpha, v_alpha, v_alpha);
+        gl_FragColor = vec4(v_alpha, v_alpha, v_alpha, 1.0);
       }
     `;
 
@@ -863,9 +863,9 @@
       if (!canvas) return false;
       gl = canvas.getContext("webgl", {
         alpha: true,
-        premultipliedAlpha: true,
+        premultipliedAlpha: false,
         antialias: false,
-        preserveDrawingBuffer: false,
+        preserveDrawingBuffer: true,
       });
       if (!gl) {
         console.warn("[VIS] WebGL unavailable");
@@ -915,9 +915,9 @@
       gl.enableVertexAttribArray(aAlpha);
       gl.vertexAttribPointer(aAlpha, 1, gl.FLOAT, false, stride, 8);
 
-      // Blending: premultiplied alpha
+      // Blending: standard straight alpha
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
       console.log("[VIS] WebGL initialized");
       return true;
@@ -1172,8 +1172,18 @@
         vertData[vi++] = r; vertData[vi++] = t; vertData[vi++] = a;
       }
 
+      gl.bindBuffer(gl.ARRAY_BUFFER, glVertBuf);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertData);
       gl.drawArrays(gl.TRIANGLES, 0, BAR_COUNT * VERTS_PER_BAR);
+
+      // First-frame diagnostic: check GL errors and pixel readback
+      if (!render._logged) {
+        render._logged = true;
+        const err = gl.getError();
+        const px = new Uint8Array(4);
+        gl.readPixels(Math.floor(W / 2), Math.floor(padY + 10), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        console.log(`[VIS-RENDER] canvas=${W}x${H} display=${canvas.style.display} glErr=${err} centerPx=[${px}] vi=${vi} bar0=[${vertData[0].toFixed(3)},${vertData[1].toFixed(3)},${vertData[2].toFixed(3)}]`);
+      }
     }
 
     // --- Toggle ---
