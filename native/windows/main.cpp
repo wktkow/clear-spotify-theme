@@ -1,10 +1,9 @@
 // main.cpp — Windows audio capture for the Spotify visualizer.
-// Captures from the WASAPI loopback (default audio output),
-// runs FFT, and sends 24 frequency bars over WebSocket at 60fps.
+// Captures from WASAPI loopback, processes audio with cava-style
+// FFT + gravity smoothing, sends 70 bars over WebSocket.
 //
-// Build:  build.bat  (or: cl /O2 /EHsc /std:c++17 main.cpp ole32.lib ws2_32.lib)
+// Build:  build.bat
 // Run:    vis-capture.exe
-// Stop:   Ctrl-C
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -63,7 +62,8 @@ static void toMono(const BYTE* src, float* dst, UINT32 frames,
 int main() {
     SetConsoleCtrlHandler(consoleHandler, TRUE);
     fprintf(stderr, "[vis] Spotify visualizer audio bridge (Windows)\n");
-    fprintf(stderr, "[vis] FFT size: %d, bars: %d\n", FFT_SIZE, BAR_COUNT);
+    fprintf(stderr, "[vis] FFT %d, bars %d, %d fps (%d samples/frame)\n",
+            FFT_SIZE, BAR_COUNT, SEND_FPS, FRAME_SAMPLES);
 
     // --- Start WebSocket server ---
     WsServer ws;
@@ -118,9 +118,11 @@ int main() {
     fprintf(stderr, "[vis] WASAPI loopback started\n");
 
     // --- Main loop ---
-    float sampleBuf[FFT_SIZE];
-    int samplePos = 0;
+    initProcessor();
+    float chunk[FRAME_SAMPLES];
+    int chunkPos = 0;
     float bars[BAR_COUNT];
+    bool wasIdle = true;
 
     bool isFloat = (mixFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
     if (mixFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
@@ -128,24 +130,24 @@ int main() {
         isFloat = (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
     }
 
-    using Clock = std::chrono::steady_clock;
-    const auto frameInterval = std::chrono::microseconds(1000000 / SEND_FPS);
-    auto nextSend = Clock::now();
-
-    fprintf(stderr, "[vis] Running at %d fps, waiting for client on ws://127.0.0.1:%d\n",
-            SEND_FPS, WS_PORT);
+    fprintf(stderr, "[vis] Waiting for client on ws://127.0.0.1:%d\n", WS_PORT);
 
     while (g_running) {
-        // Accept new WebSocket client if needed
         ws.poll();
 
-        // If no client is connected, don't read audio — just idle
         if (!ws.hasClient()) {
+            wasIdle = true;
             Sleep(50);
             continue;
         }
 
-        // Read available data from WASAPI
+        if (wasIdle) {
+            initProcessor();
+            chunkPos = 0;
+            wasIdle = false;
+            fprintf(stderr, "[vis] Client connected, streaming at %d fps\n", SEND_FPS);
+        }
+
         UINT32 packetLength = 0;
         hr = captureClient->GetNextPacketSize(&packetLength);
         if (FAILED(hr)) break;
@@ -157,19 +159,21 @@ int main() {
             hr = captureClient->GetBuffer(&data, &numFrames, &flags, nullptr, nullptr);
             if (FAILED(hr)) break;
 
+            float mono[4096];
+            UINT32 toConvert = (numFrames > 4096) ? 4096 : numFrames;
             if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-                // Silence — fill with zeros
-                for (UINT32 i = 0; i < numFrames && samplePos < FFT_SIZE; i++) {
-                    sampleBuf[samplePos++] = 0.0f;
-                }
+                memset(mono, 0, toConvert * sizeof(float));
             } else {
-                // Convert to mono float
-                float mono[4096]; // max frames per packet
-                UINT32 toConvert = (numFrames > 4096) ? 4096 : numFrames;
                 toMono(data, mono, toConvert, mixFormat->nChannels,
                        mixFormat->wBitsPerSample, isFloat);
-                for (UINT32 i = 0; i < toConvert && samplePos < FFT_SIZE; i++) {
-                    sampleBuf[samplePos++] = mono[i];
+            }
+
+            for (UINT32 i = 0; i < toConvert; i++) {
+                chunk[chunkPos++] = mono[i];
+                if (chunkPos >= FRAME_SAMPLES) {
+                    processFrame(chunk, bars);
+                    if (ws.hasClient()) ws.sendBinary(bars, sizeof(bars));
+                    chunkPos = 0;
                 }
             }
 
@@ -178,24 +182,7 @@ int main() {
             if (FAILED(hr)) break;
         }
 
-        // When we have enough samples, compute FFT
-        if (samplePos >= FFT_SIZE) {
-            computeBars(sampleBuf, bars);
-
-            // Shift buffer: keep last half for overlap
-            int keep = FFT_SIZE / 2;
-            memmove(sampleBuf, sampleBuf + (FFT_SIZE - keep), keep * sizeof(float));
-            samplePos = keep;
-
-            // Rate-limit sends
-            auto now = Clock::now();
-            if (now >= nextSend && ws.hasClient()) {
-                ws.sendBinary(bars, sizeof(bars));
-                nextSend = now + frameInterval;
-            }
-        }
-
-        Sleep(1); // ~1ms poll interval
+        Sleep(1);
     }
 
     fprintf(stderr, "\n[vis] Shutting down...\n");

@@ -313,7 +313,13 @@ if ($nativeOk) {
 
         # Start it right now
         Start-Process -FilePath $visBin -WindowStyle Hidden
-        Write-Ok "vis-capture started"
+        Start-Sleep -Seconds 1
+        $running = Get-Process -Name "vis-capture" -ErrorAction SilentlyContinue
+        if ($running) {
+            Write-Ok "Audio visualizer daemon is running (auto-starts on login)"
+        } else {
+            Write-Warn "Daemon registered but may not have started — try running vis-capture.exe manually"
+        }
     }
 }
 

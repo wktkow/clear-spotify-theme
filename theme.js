@@ -810,7 +810,7 @@
   // The daemon captures real audio output (PulseAudio/PipeWire on Linux,
   // WASAPI loopback on Windows), performs FFT, and sends 24 frequency bars.
   function initVisualizer() {
-    const BAR_COUNT = 24;
+    const BAR_COUNT = 70;
     const TARGET_FPS = 60;
     const FRAME_MS = 1000 / TARGET_FPS;
     const WS_PORT = 7700;
@@ -999,13 +999,14 @@
       }
     }
 
-    // --- Render loop ---
+    // --- Render loop (strict 60fps) ---
     function render(ts) {
       if (!active) return;
       animId = requestAnimationFrame(render);
 
-      if (ts - lastFrame < FRAME_MS) return;
-      lastFrame = ts;
+      const delta = ts - lastFrame;
+      if (delta < FRAME_MS) return;
+      lastFrame = ts - (delta % FRAME_MS);
 
       if (!ctx) return;
 
@@ -1013,38 +1014,30 @@
       const W = canvas.width;
       const H = canvas.height;
 
-      // Smooth bars toward live WebSocket data
-      // Rise fast (0.7) for snappy attack, fall moderate (0.3) for bounce
+      // Light lerp for sub-frame jitter between WS delivery and rAF
       for (let i = 0; i < BAR_COUNT; i++) {
-        const target = wsData[i];
-        if (target > displayBars[i]) {
-          displayBars[i] += (target - displayBars[i]) * 0.7;
-        } else {
-          displayBars[i] += (target - displayBars[i]) * 0.3;
-        }
+        displayBars[i] += (wsData[i] - displayBars[i]) * 0.55;
       }
 
       ctx.clearRect(0, 0, W, H);
 
       const dpr = window.devicePixelRatio || 1;
-      const padding = Math.round(24 * dpr);
+      const padding = Math.round(16 * dpr);
       const usableW = W - padding * 2;
-      const gap = Math.round(3 * dpr);
-      const barW = Math.round(
-        Math.max(2, (usableW - gap * (BAR_COUNT - 1)) / BAR_COUNT),
-      );
+      const gap = Math.round(1.5 * dpr);
+      const barW = Math.max(2, (usableW - gap * (BAR_COUNT - 1)) / BAR_COUNT);
       const maxH = H - padding * 2;
-      const radius = Math.min(Math.round(barW * 0.35), Math.round(4 * dpr));
+      const radius = Math.min(Math.round(barW * 0.4), Math.round(3 * dpr));
       const baseY = H - padding;
 
       for (let i = 0; i < BAR_COUNT; i++) {
-        const norm = Math.max(0, Math.min(1, displayBars[i]));
-        const h = Math.round(Math.max(3 * dpr, norm * maxH));
-        const x = Math.round(padding + i * (barW + gap));
+        const v = Math.max(0, Math.min(1, displayBars[i]));
+        const h = Math.max(1 * dpr, v * maxH);
+        const x = padding + i * (barW + gap);
         const y = baseY - h;
 
-        const alpha = 0.4 + norm * 0.6;
-        ctx.fillStyle = `rgba(250, 250, 250, ${alpha})`;
+        const alpha = 0.3 + v * 0.7;
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
         if (ctx.roundRect) {
           ctx.beginPath();
           ctx.roundRect(x, y, barW, h, [radius, radius, 0, 0]);

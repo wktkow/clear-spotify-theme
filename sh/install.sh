@@ -247,7 +247,12 @@ else
             systemctl --user daemon-reload
             systemctl --user enable clear-vis.service
             systemctl --user start clear-vis.service
-            green "Enabled clear-vis systemd user service (auto-starts on login)"
+            sleep 1
+            if systemctl --user is-active --quiet clear-vis.service; then
+                green "Audio visualizer daemon is running (auto-starts on login)"
+            else
+                yellow "Daemon enabled but may not have started — check: systemctl --user status clear-vis.service"
+            fi
         else
             red "vis-capture build failed — see errors above"
             yellow "You can build manually: cd native/linux && make"
