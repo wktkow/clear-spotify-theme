@@ -10,11 +10,11 @@
 #include "protocol.h"
 
 // ---- Tuning constants ----
-constexpr float GRAVITY_ACCEL = 0.002f;
-constexpr float AGC_ATTACK    = 0.985f;
-constexpr float AGC_RELEASE   = 1.015f;
-constexpr float AGC_MIN       = 0.1f;
-constexpr float AGC_MAX       = 80.0f;
+constexpr float GRAVITY_ACCEL = 0.03f;   // per-frame fall acceleration (strong)
+constexpr float AGC_ATTACK    = 0.92f;   // sensitivity shrinks fast when too loud
+constexpr float AGC_RELEASE   = 1.005f;  // sensitivity grows slowly when too quiet
+constexpr float AGC_MIN       = 0.5f;
+constexpr float AGC_MAX       = 20.0f;
 
 // ---- Complex helpers ----
 struct Complex { float re, im; };
@@ -122,13 +122,33 @@ static void processFrame(const float* newSamples, float* bars) {
         rawBars[b] = count > 0 ? sum / count : 0.0f;
     }
 
-    // 5. Normalize by FFT size and apply perceptual scaling (sqrt)
+    // 5. Normalize by FFT size and apply sensitivity + perceptual scaling
+    float rawPeak = 0.0f;
     for (int b = 0; b < BAR_COUNT; b++) {
         float norm = rawBars[b] / (FFT_SIZE * 0.5f);
         rawBars[b] = sqrtf(norm) * g_sensitivity;
+        if (rawBars[b] > rawPeak) rawPeak = rawBars[b];
     }
 
-    // 6. Inter-bar smoothing (gentle neighbor blend, reduces noise)
+    // 6. Auto-sensitivity (AGC) on raw signal BEFORE gravity/clamping
+    //    This way we see the true signal level, not the gravity-smoothed one.
+    if (rawPeak > 1.0f) {
+        g_sensitivity *= AGC_ATTACK;
+    } else if (rawPeak > 0.001f && rawPeak < 0.5f) {
+        g_sensitivity *= AGC_RELEASE;
+    } else if (rawPeak <= 0.001f) {
+        // Silence: gently drift back to baseline
+        g_sensitivity += (2.0f - g_sensitivity) * 0.01f;
+    }
+    g_sensitivity = std::max(AGC_MIN, std::min(AGC_MAX, g_sensitivity));
+
+    // 7. Clamp raw bars to [0, 1] BEFORE gravity so gravity can always work
+    for (int b = 0; b < BAR_COUNT; b++) {
+        if (rawBars[b] > 1.0f) rawBars[b] = 1.0f;
+        if (rawBars[b] < 0.0f) rawBars[b] = 0.0f;
+    }
+
+    // 8. Inter-bar smoothing (gentle neighbor blend, reduces noise)
     {
         float tmp[BAR_COUNT];
         tmp[0] = rawBars[0] * 0.8f + rawBars[1] * 0.2f;
@@ -138,7 +158,7 @@ static void processFrame(const float* newSamples, float* bars) {
         memcpy(rawBars, tmp, sizeof(rawBars));
     }
 
-    // 7. Gravity smoothing (cava-style: instant attack, accelerating fall)
+    // 9. Gravity smoothing (cava-style: instant attack, accelerating fall)
     for (int b = 0; b < BAR_COUNT; b++) {
         if (rawBars[b] >= g_smoothBars[b]) {
             g_smoothBars[b] = rawBars[b];
@@ -150,21 +170,7 @@ static void processFrame(const float* newSamples, float* bars) {
         }
     }
 
-    // 8. Auto-sensitivity (AGC) — adapts to any volume level
-    float peak = 0.0f;
-    for (int b = 0; b < BAR_COUNT; b++)
-        if (g_smoothBars[b] > peak) peak = g_smoothBars[b];
-
-    if (peak > 1.05f) {
-        g_sensitivity *= AGC_ATTACK;
-    } else if (peak > 0.001f && peak < 0.3f) {
-        g_sensitivity *= AGC_RELEASE;
-    } else if (peak <= 0.001f) {
-        g_sensitivity += (1.5f - g_sensitivity) * 0.005f;
-    }
-    g_sensitivity = std::max(AGC_MIN, std::min(AGC_MAX, g_sensitivity));
-
-    // 9. Output clamped to [0, 1]
+    // 10. Output clamped to [0, 1]
     for (int b = 0; b < BAR_COUNT; b++)
         bars[b] = std::max(0.0f, std::min(1.0f, g_smoothBars[b]));
 }
