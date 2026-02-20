@@ -12,8 +12,6 @@ Opinionated Spotify theme reducing screen clutter and improving readability
 
 ![Embeded Audio Visualizer](images/visualizer.png)
 
-_Uses pre-computed values for 0 performance hit_
-
 ## Installation (Desktop App)
 
 ### On Linux:
