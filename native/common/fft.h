@@ -25,12 +25,12 @@ constexpr float GRAVITY_STEP    = 0.028f;
 constexpr float GRAVITY_MOD     = 1.54f / NOISE_REDUCTION;
 
 // Auto-sensitivity (global gain).
-// attack 0.98 per frame on overshoot, release 1.002 per frame.
+// attack 0.98 per frame on overshoot, release 1.001 per frame.
 // sens_init mode ramps fast (1.1x/frame) until first overshoot.
-// Start conservative (0.2) — equilibrium is near 0.77 for typical music.
-constexpr float SENS_INIT       = 0.2f;
+// Start at 1.0 (cava default) so bars respond immediately.
+constexpr float SENS_INIT       = 1.0f;
 constexpr float SENS_ATTACK     = 0.98f;
-constexpr float SENS_RELEASE    = 1.002f;
+constexpr float SENS_RELEASE    = 1.001f;
 constexpr float SENS_INIT_BOOST = 1.1f;
 constexpr float SENS_MIN        = 0.02f;
 constexpr float SENS_MAX        = 20.0f;
@@ -193,14 +193,17 @@ static void processFrame(const float* newSamples, float* bars) {
 
         // Integral smoothing (temporal IIR low-pass filter).
         // Accumulates: out = mem * NR + raw.  Steady-state gain ~ 1/(1-NR).
+        // Store UNCLAMPED value in mem — this is critical for autosens stability.
+        // Clamped mem causes bars to oscillate at the 1.0 boundary because the
+        // system loses inertia: when signal drops just below 0.23, bars instantly
+        // leave the overshoot zone, sens grows, bars overshoot again = jitter.
+        // Unclamped mem provides the inertia that lets autosens converge smoothly.
         rawBars[b] = g_mem[b] * NOISE_REDUCTION + rawBars[b];
+        g_mem[b] = rawBars[b];  // store UNCLAMPED (matches cava)
 
-        // Clamp to [0, 1], then store clamped value in mem.
-        // Without clamping mem, the accumulator builds up above 1.0 and
-        // bars lock at the ceiling — they can't fall because mem is too high.
+        // Clamp output for display only — overshoot tracking uses unclamped value
         if (rawBars[b] > 1.0f) { overshoot = true; rawBars[b] = 1.0f; }
         if (rawBars[b] < 0.0f) rawBars[b] = 0.0f;
-        g_mem[b] = rawBars[b];
 
         bars[b] = rawBars[b];
     }
