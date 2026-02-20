@@ -825,6 +825,7 @@
     let ws = null;
     let wsConnected = false;
     const wsData = new Float32Array(BAR_COUNT);
+    const displayData = new Float32Array(BAR_COUNT); // lerp-smoothed for rendering
     let reconnectTimer = null;
     let lastMsgTime = 0;
 
@@ -996,13 +997,16 @@
     function resizeCanvas() {
       if (!canvas || !overlay) return;
       const dpr = window.devicePixelRatio || 1;
-      const w = overlay.clientWidth;
-      const h = overlay.clientHeight;
-      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-        canvas.width = w * dpr;
-        canvas.height = h * dpr;
-        canvas.style.width = w + "px";
-        canvas.style.height = h + "px";
+      // Round to prevent resize every frame on fractional DPR (1.25, 1.5).
+      // Without rounding, canvas.width (integer) !== w*dpr (float) is always
+      // true, causing GPU framebuffer reallocation 60× per second.
+      const tw = Math.round(overlay.clientWidth * dpr);
+      const th = Math.round(overlay.clientHeight * dpr);
+      if (canvas.width !== tw || canvas.height !== th) {
+        canvas.width = tw;
+        canvas.height = th;
+        canvas.style.width = overlay.clientWidth + "px";
+        canvas.style.height = overlay.clientHeight + "px";
       }
     }
 
@@ -1012,9 +1016,23 @@
       animId = requestAnimationFrame(render);
       if (!ctx) return;
 
-      // Zero bars if no data received recently (prevents stale lockup)
-      if (lastMsgTime > 0 && performance.now() - lastMsgTime > 150) {
-        wsData.fill(0);
+      // Graceful staleness: 300ms grace, then fade over 500ms.
+      // Replaces the old hard 150ms zero-out that caused flicker when
+      // Electron's event loop stalled under heavy UI load.
+      if (lastMsgTime > 0) {
+        const staleMs = performance.now() - lastMsgTime;
+        if (staleMs > 300) {
+          const fade = Math.max(0, 1 - (staleMs - 300) / 500);
+          for (let i = 0; i < BAR_COUNT; i++) wsData[i] *= fade;
+          if (fade === 0) lastMsgTime = 0;
+        }
+      }
+
+      // Lightweight lerp: smooths transport jitter (dropped/delayed WS
+      // messages) and micro-oscillations visible on pixel displays but
+      // hidden in terminal rendering (cava).  ~33ms convergence at 60fps.
+      for (let i = 0; i < BAR_COUNT; i++) {
+        displayData[i] += (wsData[i] - displayData[i]) * 0.45;
       }
 
       resizeCanvas();
@@ -1032,7 +1050,7 @@
       const baseY = H - padding;
 
       for (let i = 0; i < BAR_COUNT; i++) {
-        const v = wsData[i];
+        const v = displayData[i];
         const h = Math.max(1 * dpr, v * maxH);
         const x = padding + i * (barW + gap);
         const y = baseY - h;
@@ -1057,6 +1075,7 @@
         if (overlay) overlay.classList.add("clear-visualizer-overlay--open");
         if (btn) btn.classList.add("clear-visualizer-btn--active");
         wsData.fill(0);
+        displayData.fill(0);
         connectWs();
         animId = requestAnimationFrame(render);
       } else {

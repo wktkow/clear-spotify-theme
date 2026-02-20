@@ -24,6 +24,7 @@
   #include <unistd.h>
   #include <sys/socket.h>
   #include <netinet/in.h>
+  #include <netinet/tcp.h>
   #include <arpa/inet.h>
   #include <fcntl.h>
   #include <errno.h>
@@ -142,9 +143,13 @@ public:
     }
 
     // Call each frame: accepts new client if none connected,
-    // performs handshake if needed.
+    // performs handshake if needed.  Also drains any incoming client
+    // data (close/pong frames) so the TCP receive buffer doesn't fill.
     void poll() {
-        if (clientSock != SOCK_INVALID) return;  // already have a client
+        if (clientSock != SOCK_INVALID) {
+            drainClient();
+            return;
+        }
         if (listenSock == SOCK_INVALID) return;
 
         struct sockaddr_in ca{};
@@ -160,6 +165,9 @@ public:
 #else
         { int flags = fcntl(s, F_GETFL, 0); fcntl(s, F_SETFL, flags & ~O_NONBLOCK); }
 #endif
+        // Disable Nagle so the 4-byte header and 280-byte payload sent in
+        // two send() calls go out immediately without coalescing delay.
+        { int one = 1; setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&one, sizeof(one)); }
 
         // Read HTTP upgrade request
         char buf[4096];
@@ -220,17 +228,9 @@ public:
             hdr[9] = (uint8_t)(len);
         }
 
-        // Send header + payload.  MSG_NOSIGNAL prevents SIGPIPE on Linux
-        // if the client disconnects between sends.
-        int flags = 0;
-#ifdef __linux__
-        flags = MSG_NOSIGNAL;
-#endif
-        int sent = send(clientSock, (const char*)hdr, hdrLen, flags);
-        if (sent <= 0) { dropClient(); return false; }
-
-        sent = send(clientSock, (const char*)data, (int)len, flags);
-        if (sent <= 0) { dropClient(); return false; }
+        // Send header + payload via sendAll to handle partial sends.
+        if (!sendAll((const char*)hdr, hdrLen)) { dropClient(); return false; }
+        if (!sendAll((const char*)data, (int)len)) { dropClient(); return false; }
 
         return true;
     }
@@ -238,6 +238,36 @@ public:
     bool hasClient() const { return clientSock != SOCK_INVALID; }
 
 private:
+    // Send all bytes, retrying on partial sends.
+    bool sendAll(const char* buf, int len) {
+        int flags = 0;
+#ifdef __linux__
+        flags = MSG_NOSIGNAL;
+#endif
+        int off = 0;
+        while (off < len) {
+            int n = send(clientSock, buf + off, len - off, flags);
+            if (n <= 0) return false;
+            off += n;
+        }
+        return true;
+    }
+
+    // Non-blocking drain of any data the browser sent us (close/pong frames).
+    // We never parse it — just keep the TCP receive buffer from filling up.
+    void drainClient() {
+        if (clientSock == SOCK_INVALID) return;
+        char junk[512];
+#ifdef _WIN32
+        u_long avail = 0;
+        ioctlsocket(clientSock, FIONREAD, &avail);
+        if (avail > 0) recv(clientSock, junk, sizeof(junk), 0);
+#else
+        // MSG_DONTWAIT = non-blocking one-shot read
+        recv(clientSock, junk, sizeof(junk), MSG_DONTWAIT);
+#endif
+    }
+
     void dropClient() {
         fprintf(stderr, "[ws] client disconnected\n");
         sock_close(clientSock);

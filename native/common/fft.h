@@ -27,18 +27,17 @@ constexpr float GRAVITY_MOD     = 1.54f / NOISE_REDUCTION;
 // Auto-sensitivity (global gain).
 // attack 0.98 per frame on overshoot, release 1.001 per frame.
 // sens_init mode ramps fast (1.1x/frame) until first overshoot.
-//
-// NOTE: cava uses SENS_INIT=1.0, no cap, no audio gate.  This works for
-// cava because audio is already playing when the user starts it.  Our daemon
-// has a silence→noise→quiet→loud transition every client reconnect, so the
-// uncapped boost rockets sens to SENS_MAX on microscopic PA warmup noise,
-// causing a multi-second lockup when real music arrives.  We start lower
-// (0.3, near typical steady-state 0.2–0.3) and cap the boost early.
-constexpr float SENS_INIT       = 0.3f;
+// Silence is detected on raw PCM (any non-zero = not silent), matching
+// cava's approach — prevents sens drift on FFT floating-point artifacts.
+// sensInit boost is gated on audioMax > SENS_INIT_AUDIO_GATE to prevent
+// explosive ramp on microscopic PA warmup noise, and capped at
+// SENS_INIT_CAP so the worst-case lockup when real music arrives is brief.
+constexpr float SENS_INIT       = 1.0f;
 constexpr float SENS_ATTACK     = 0.98f;
 constexpr float SENS_RELEASE    = 1.001f;
 constexpr float SENS_INIT_BOOST = 1.1f;
-constexpr float SENS_INIT_CAP   = 0.5f;  // disable sensInit when exceeded
+constexpr float SENS_INIT_CAP   = 2.0f;
+constexpr float SENS_INIT_AUDIO_GATE = 0.005f;
 constexpr float SENS_MIN        = 0.02f;
 constexpr float SENS_MAX        = 20.0f;
 
@@ -176,8 +175,11 @@ static void processFrame(const float* newSamples, float* bars) {
         mag[i] = sqrtf(fftBuf[i].re * fftBuf[i].re + fftBuf[i].im * fftBuf[i].im);
 
     // 4. Bin into bars: average magnitude per frequency range, normalize, EQ
+    //    Silence is checked on raw PCM (audioMax == 0), matching cava's
+    //    approach.  Checking post-FFT bars was wrong: floating-point FFT
+    //    artifacts × sens could fool the silence gate during true silence.
+    bool silence = (audioMax == 0.0f);
     float rawBars[BAR_COUNT];
-    bool silence = true;
     for (int b = 0; b < BAR_COUNT; b++) {
         float sum = 0.0f;
         int count = g_binHi[b] - g_binLo[b] + 1;
@@ -188,8 +190,6 @@ static void processFrame(const float* newSamples, float* bars) {
         // Normalize by FFT size, sqrt compression, per-bar EQ, global sensitivity
         float norm = avg / (FFT_SIZE * 0.5f);
         rawBars[b] = sqrtf(norm) * g_eq[b] * g_sens;
-
-        if (rawBars[b] > 0.001f) silence = false;
     }
 
     // 5. Gravity + integral smoothing + clamping (cava order)
@@ -225,17 +225,19 @@ static void processFrame(const float* newSamples, float* bars) {
 
     // 6. Auto-sensitivity (cava-style):
     //    overshoot -> gently reduce.  Quiet -> slowly grow.
-    //    Initial mode ramps fast (1.1x/frame) until first overshoot,
-    //    but only when real audio is present (audioMax > 0.01) and
-    //    capped at SENS_INIT_CAP to limit lockup to ~0.5s.
+    //    sensInit ramps fast until first overshoot OR sens exceeds cap.
+    //    sensInit boost only fires when audioMax > SENS_INIT_AUDIO_GATE
+    //    so PA warmup noise (amplitude ~1e-6) doesn't trigger the ramp.
     if (overshoot) {
         g_sens *= SENS_ATTACK;
         g_sensInit = false;
     } else if (!silence) {
         g_sens *= SENS_RELEASE;
         if (g_sensInit) {
-            if (audioMax > 0.01f) g_sens *= SENS_INIT_BOOST;
-            if (g_sens > SENS_INIT_CAP) g_sensInit = false;
+            if (audioMax > SENS_INIT_AUDIO_GATE)
+                g_sens *= SENS_INIT_BOOST;
+            if (g_sens > SENS_INIT_CAP)
+                g_sensInit = false;
         }
     }
     g_sens = std::max(SENS_MIN, std::min(SENS_MAX, g_sens));
