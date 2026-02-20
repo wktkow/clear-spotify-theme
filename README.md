@@ -8,7 +8,7 @@ Opinionated spicetify theme reducing screen clutter and improving readability
 
 ![On Hover Search Bar](images/onhover.gif)
 
-## Installation
+## Installation (Desktop App)
 
 ### On Linux:
 
