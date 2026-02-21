@@ -10,7 +10,7 @@ Opinionated Spotify client reducing screen clutter and improving readability.
 
 ## Embeded Audio Visualizer! :D
 
-[![Watch the Embedded Audio Visualizer demo](https://img.youtube.com/vi/fwry72jtBTE/maxresdefault.jpg)](https://youtu.be/fwry72jtBTE)
+[![Watch the Embedded Audio Visualizer demo](images/vis-demo.jpg)](https://youtu.be/fwry72jtBTE)
 
 ### And it's configurable!
 
