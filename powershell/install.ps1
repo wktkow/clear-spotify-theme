@@ -7,6 +7,7 @@
     - Kills Spotify if running
     - Detects and fully removes any previous Clear installation
     - Downloads fresh theme files (user.css, color.ini, theme.js)
+    - Installs Visual Studio Build Tools if needed (for compiling the visualizer)
     - Builds/downloads the audio visualizer daemon (vis-capture)
     - Configures and applies the theme
     - Launches Spotify
@@ -281,8 +282,84 @@ foreach ($nf in $nativeFiles) {
 }
 
 if ($nativeOk) {
-    # Try to build with cl.exe if available
+    # Ensure C++ compiler is available (install Build Tools if needed)
     $clCmd = Get-Command cl -ErrorAction SilentlyContinue
+
+    if (-not $clCmd) {
+        # cl.exe is never in PATH normally — look for existing VS installation
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
+        if (-not (Test-Path $vswhere)) {
+            Write-Warn "C++ build tools not found — installing Visual Studio Build Tools..."
+            Write-Warn "This is a one-time setup and may take 5-10 minutes..."
+            $btInstalled = $false
+
+            # Try winget first (built into Windows 10/11)
+            if (Get-Command winget -ErrorAction SilentlyContinue) {
+                try {
+                    & winget install Microsoft.VisualStudio.2022.BuildTools `
+                        --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" `
+                        --accept-source-agreements --accept-package-agreements 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        $btInstalled = $true
+                        Write-Ok "Build Tools installed via winget"
+                    }
+                } catch {}
+            }
+
+            # Fallback: download installer directly from Microsoft
+            if (-not $btInstalled) {
+                if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+                    Write-Warn "winget not available — downloading Build Tools installer directly..."
+                }
+                $bootstrapper = Join-Path $env:TEMP "vs_buildtools.exe"
+                try {
+                    Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile $bootstrapper -UseBasicParsing
+                    $proc = Start-Process -FilePath $bootstrapper `
+                        -ArgumentList "--quiet","--wait","--add","Microsoft.VisualStudio.Workload.VCTools","--includeRecommended" `
+                        -Wait -PassThru
+                    if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                        $btInstalled = $true
+                        Write-Ok "Build Tools installed"
+                        if ($proc.ExitCode -eq 3010) {
+                            Write-Warn "A system restart is recommended after this install completes"
+                        }
+                    } else {
+                        Write-Warn "Build Tools installer exited with code $($proc.ExitCode)"
+                    }
+                } catch {
+                    Write-Warn "Failed to install Build Tools: $_"
+                }
+                if (Test-Path $bootstrapper) { Remove-Item $bootstrapper -Force -ErrorAction SilentlyContinue }
+            }
+        }
+
+        # Import VC environment into this PowerShell session via vcvarsall.bat
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (Test-Path $vswhere) {
+            $vsPath = & $vswhere -latest -products * `
+                -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+                -property installationPath 2>$null
+            if ($vsPath) {
+                $vcvarsall = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+                if (Test-Path $vcvarsall) {
+                    Write-Ok "Importing VC environment from: $vsPath"
+                    $vcCmd = "`"$vcvarsall`" x64 >nul 2>&1 && set"
+                    cmd /c $vcCmd | ForEach-Object {
+                        if ($_ -match "^([^=]+)=(.*)$") {
+                            Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+                        }
+                    }
+                    $clCmd = Get-Command cl -ErrorAction SilentlyContinue
+                    if ($clCmd) { Write-Ok "cl.exe is now available" }
+                    else { Write-Warn "Could not find cl.exe after importing VC environment" }
+                }
+            } else {
+                Write-Warn "No VS installation with C++ tools found via vswhere"
+            }
+        }
+    }
+
     $built = $false
 
     if ($clCmd) {
@@ -313,7 +390,7 @@ if ($nativeOk) {
             }
         } catch {
             Write-Warn "Could not download pre-built binary"
-            Write-Warn "Install Visual Studio Build Tools and re-run, or build manually with build.bat"
+            Write-Warn "Try running this script from a VS Developer Command Prompt, or build manually with build.bat"
         }
     }
 
