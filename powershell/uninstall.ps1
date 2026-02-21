@@ -183,10 +183,10 @@ if ($spicetifyDir) {
 
     # Reset spicetify config
     if ($spicetifyCmd) {
-        & spicetify config current_theme "" 2>$null
-        & spicetify config inject_theme_js 0 2>$null
-        & spicetify config color_scheme "" 2>$null
-        & spicetify config extensions "" 2>$null
+        & spicetify config current_theme ""
+        & spicetify config inject_theme_js 0
+        & spicetify config color_scheme ""
+        & spicetify config extensions ""
         Write-Ok "Reset spicetify configuration"
     }
 } else {

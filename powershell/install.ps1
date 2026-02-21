@@ -386,10 +386,11 @@ else { Write-Ok "Color scheme reset to default" }
 
 # ── 9. Apply ────────────────────────────────────────────────────────────────
 Write-Step "Applying theme"
-& spicetify backup apply 2>$null
+Write-Ok "This may take a minute — spicetify is processing Spotify files..."
+& spicetify backup apply
 if ($LASTEXITCODE -ne 0) {
     Write-Warn "spicetify backup apply failed (exit code $LASTEXITCODE), trying apply only..."
-    & spicetify apply 2>$null
+    & spicetify apply
     if ($LASTEXITCODE -ne 0) {
         Write-Host "   Failed to apply theme (exit code $LASTEXITCODE)" -ForegroundColor Red
         Write-Host "   Try running 'spicetify restore backup apply' manually." -ForegroundColor Yellow
