@@ -18,7 +18,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$repo = "wktkow/clear-spotify-client"
+$repo = "wktkow/clear-spotify-theme"
 $branch = "main"
 $baseUrl = "https://raw.githubusercontent.com/$repo/$branch"
 $themeFiles = @("user.css", "color.ini", "theme.js")

@@ -1,5 +1,6 @@
 // ws_server.h — Minimal single-client WebSocket server for the visualizer.
-// Handles the HTTP upgrade handshake, sends binary frames.  Header-only.
+// Handles the HTTP upgrade handshake, sends binary/text frames,
+// and reads incoming text commands from the client.  Header-only.
 // No external dependencies beyond POSIX sockets + <cstdint>.
 #ifndef VIS_WS_SERVER_H
 #define VIS_WS_SERVER_H
@@ -9,6 +10,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <functional>
 
 // ---- Platform socket abstraction ----
 #ifdef _WIN32
@@ -103,6 +105,10 @@ class WsServer {
 public:
     WsServer() : listenSock(SOCK_INVALID), clientSock(SOCK_INVALID) {}
     ~WsServer() { stop(); }
+
+    // Optional callback for text messages from the client.
+    // Set before calling poll().
+    std::function<void(const std::string&)> onText;
 
     bool start(int port) {
         sock_init();
@@ -203,12 +209,24 @@ public:
     // Send a binary WebSocket frame.  Returns false if send failed
     // (client disconnected).
     bool sendBinary(const void* data, size_t len) {
+        return sendFrame(0x82, data, len);
+    }
+
+    // Send a text WebSocket frame.
+    bool sendText(const std::string& msg) {
+        return sendFrame(0x81, msg.data(), msg.size());
+    }
+
+    bool hasClient() const { return clientSock != SOCK_INVALID; }
+
+private:
+    // Generic frame sender (opcode 0x81 = text, 0x82 = binary).
+    bool sendFrame(uint8_t opcode, const void* data, size_t len) {
         if (clientSock == SOCK_INVALID) return false;
 
-        // WebSocket frame header (no mask, binary opcode)
         uint8_t hdr[10];
         int hdrLen = 0;
-        hdr[0] = 0x82; // FIN + binary opcode
+        hdr[0] = opcode; // FIN + opcode
         if (len < 126) {
             hdr[1] = (uint8_t)len;
             hdrLen = 2;
@@ -234,10 +252,6 @@ public:
 
         return true;
     }
-
-    bool hasClient() const { return clientSock != SOCK_INVALID; }
-
-private:
     // Send all bytes, retrying on partial sends.
     bool sendAll(const char* buf, int len) {
         int flags = 0;
@@ -253,27 +267,86 @@ private:
         return true;
     }
 
-    // Non-blocking drain of any data the browser sent us (close/pong frames).
-    // We never parse it — just keep the TCP receive buffer from filling up.
-    // Also detects client disconnect (recv returns 0 or error) so we can
-    // accept a new connection immediately.
+    // Non-blocking read + parse of incoming WebSocket frames.
+    // Handles text messages (dispatched to onText callback), close, pong.
+    // Detects client disconnect so we can accept a new connection.
     void drainClient() {
         if (clientSock == SOCK_INVALID) return;
-        char junk[512];
+
+        // Peek to see if there's data without blocking.
+        uint8_t peek;
 #ifdef _WIN32
         u_long avail = 0;
         ioctlsocket(clientSock, FIONREAD, &avail);
-        if (avail > 0) {
-            int n = recv(clientSock, junk, sizeof(junk), 0);
-            if (n <= 0) { dropClient(); return; }
-        }
+        if (avail == 0) return;
 #else
-        // MSG_DONTWAIT = non-blocking one-shot read
-        int n = recv(clientSock, junk, sizeof(junk), MSG_DONTWAIT);
-        // n == 0 → orderly close; n == -1 with EAGAIN/EWOULDBLOCK → no data (OK)
+        int n = recv(clientSock, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
         if (n == 0) { dropClient(); return; }
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { dropClient(); return; }
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            dropClient(); return;
+        }
 #endif
+
+        // There's data — read the frame header (2 bytes minimum).
+        uint8_t hdr[2];
+        if (!recvAll(hdr, 2)) { dropClient(); return; }
+
+        uint8_t opcode = hdr[0] & 0x0F;
+        bool masked = (hdr[1] & 0x80) != 0;
+        uint64_t payLen = hdr[1] & 0x7F;
+
+        if (payLen == 126) {
+            uint8_t ext[2];
+            if (!recvAll(ext, 2)) { dropClient(); return; }
+            payLen = ((uint64_t)ext[0] << 8) | ext[1];
+        } else if (payLen == 127) {
+            uint8_t ext[8];
+            if (!recvAll(ext, 8)) { dropClient(); return; }
+            payLen = 0;
+            for (int i = 0; i < 8; i++) payLen = (payLen << 8) | ext[i];
+        }
+
+        uint8_t mask[4] = {};
+        if (masked) {
+            if (!recvAll(mask, 4)) { dropClient(); return; }
+        }
+
+        // Read payload (cap at 4 KB — we never expect large messages)
+        if (payLen > 4096) {
+            // Nonsensical — drop connection
+            dropClient(); return;
+        }
+        std::string payload((size_t)payLen, '\0');
+        if (payLen > 0) {
+            if (!recvAll((uint8_t*)&payload[0], (int)payLen)) { dropClient(); return; }
+            if (masked) {
+                for (size_t i = 0; i < payLen; i++)
+                    payload[i] ^= mask[i % 4];
+            }
+        }
+
+        if (opcode == 0x08) {
+            // Close frame — send close back and drop
+            uint8_t close[4] = {0x88, 0x00};
+            sendAll((const char*)close, 2);
+            dropClient();
+        } else if (opcode == 0x01) {
+            // Text frame — dispatch to callback
+            if (onText) onText(payload);
+        }
+        // Pong (0x0A) and other frames are silently consumed.
+    }
+
+    // Blocking recv of exactly `len` bytes.
+    bool recvAll(uint8_t* buf, int len) {
+        int off = 0;
+        while (off < len) {
+            int n = recv(clientSock, (char*)buf + off, len - off, 0);
+            if (n <= 0) return false;
+            off += n;
+        }
+        return true;
     }
 
     void dropClient() {

@@ -1347,6 +1347,15 @@ button.main-playPauseButton-button {
   pointer-events: auto;
 }
 
+/* Disable hover extension area on marketplace page to prevent click interception */
+.Root__main-view:has(.marketplace-header) ~ #global-nav-bar::after,
+#global-nav-bar:has(~ .Root__main-view .marketplace-header)::after {
+  pointer-events: none;
+}
+body:has(.marketplace-header) #global-nav-bar::after {
+  pointer-events: none;
+}
+
 /* --- Kebab Menu (3-dots) --- */
 .clear-kebab-menu {
   position: relative;
@@ -1474,6 +1483,115 @@ button.main-playPauseButton-button {
 
 .clear-settings-overlay--open .clear-settings-modal {
   transform: translateY(0) scale(1);
+}
+
+/* --- Visualizer Settings Modal (wide) --- */
+.clear-vis-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10002;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0);
+  visibility: hidden;
+  transition:
+    background-color 0.15s ease,
+    visibility 0.15s ease;
+}
+.clear-vis-settings-overlay--open {
+  background-color: rgba(0, 0, 0, 0.55);
+  visibility: visible;
+}
+
+.clear-vis-settings-modal {
+  min-width: 38rem;
+  width: fit-content;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: var(--spice-main);
+  border: var(--default-border);
+  border-radius: var(--border-radius-md);
+  padding: 1.25rem;
+  transform: translateY(8px) scale(0.97);
+  transition: transform 0.15s ease;
+}
+.clear-vis-settings-overlay--open .clear-vis-settings-modal {
+  transform: translateY(0) scale(1);
+}
+
+/* Slider inside vis settings */
+.clear-vis-slider-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-shrink: 0;
+}
+.clear-vis-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 8rem;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--spice-button-hover);
+  outline: none;
+  cursor: pointer;
+}
+.clear-vis-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--spice-accent, #1db954);
+  cursor: pointer;
+}
+.clear-vis-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--spice-accent, #1db954);
+  cursor: pointer;
+}
+.clear-vis-slider-value {
+  font-size: 0.75rem;
+  color: var(--spice-subtext);
+  min-width: 2rem;
+  text-align: right;
+}
+
+/* FPS / option button group */
+.clear-vis-fps-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+.clear-vis-fps-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--spice-button-hover);
+  border-radius: var(--border-radius-md);
+  background: none;
+  color: var(--spice-subtext);
+  cursor: pointer;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease,
+    border-color 0.1s ease;
+}
+.clear-vis-fps-btn:hover {
+  background-color: var(--spice-button-hover);
+  color: var(--spice-text);
+}
+.clear-vis-fps-btn--active {
+  background-color: var(--spice-accent, #1db954);
+  color: #000;
+  border-color: var(--spice-accent, #1db954);
 }
 
 .clear-settings-header {
@@ -2161,12 +2279,7 @@ body.clear-hide-marketplace .clear-kebab-item-marketplace {
   line-height: 1.6;
 }
 
-#clear-visualizer-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
+#clear-visualizer-bars {\n  position: absolute;\n  inset: 0;\n}
 
 .clear-visualizer-close {
   position: absolute;

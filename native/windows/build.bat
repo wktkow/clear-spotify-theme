@@ -13,7 +13,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-cl /O2 /EHsc /std:c++17 /Fe:vis-capture.exe main.cpp ole32.lib ws2_32.lib
+cl /O2 /EHsc /std:c++17 /I"..\common" /Fe:vis-capture.exe main.cpp ole32.lib ws2_32.lib
 if %errorlevel% equ 0 (
     echo.
     echo Build successful: vis-capture.exe

@@ -26,7 +26,7 @@ constexpr float SMOOTH_DECAY  = 0.85f;  // EMA alpha when falling
 // Gravity: constant-acceleration fall from peak position.
 // velocity += GRAVITY each frame; peak -= velocity each frame.
 // From peak=1.0 to 0 takes ~22 frames (367ms at 60fps).
-constexpr float GRAVITY       = 0.004f;
+constexpr float GRAVITY       = 0.008f;
 
 // Silence threshold: float32 PA captures microscopic warmup noise
 // that would be zero in cava's S16LE format.  Anything below this
@@ -41,8 +41,9 @@ constexpr float SILENCE_THRESHOLD = 1e-4f;
 constexpr float SENS_INIT       = 1.0f;
 constexpr float SENS_ATTACK     = 0.85f;
 constexpr float SENS_RELEASE    = 1.002f;
-constexpr float SENS_INIT_BOOST = 1.1f;
+constexpr float SENS_INIT_BOOST = 1.05f;
 constexpr float SENS_INIT_CAP   = 5.0f;
+constexpr float SENS_TARGET     = 0.65f;
 constexpr float SENS_MIN        = 0.02f;
 constexpr float SENS_MAX        = 5.0f;
 
@@ -90,15 +91,19 @@ static void fft(Complex* buf, int n) {
     }
 }
 
-// ---- Processor state ----
+// ---- Runtime-configurable parameters ----
+static int   g_barCount = BAR_COUNT;    // current bar count (default 72)
+static float g_freqMax  = FREQ_MAX;     // current upper freq cutoff
+
+// ---- Processor state (arrays sized to MAX_BAR_COUNT) ----
 static float g_inputBuf[FFT_SIZE];      // sliding window of real audio
 static float g_window[FFT_SIZE];        // Hann window (full FFT buffer)
-static int   g_binLo[BAR_COUNT];        // FFT bin lower bound per bar
-static int   g_binHi[BAR_COUNT];        // FFT bin upper bound per bar
-static float g_eq[BAR_COUNT];           // per-bar EQ weight
-static float g_mem[BAR_COUNT];          // EMA smoothing memory
-static float g_peak[BAR_COUNT];         // gravity peak tracker
-static float g_fall[BAR_COUNT];         // gravity fall velocity
+static int   g_binLo[MAX_BAR_COUNT];    // FFT bin lower bound per bar
+static int   g_binHi[MAX_BAR_COUNT];    // FFT bin upper bound per bar
+static float g_eq[MAX_BAR_COUNT];       // per-bar EQ weight
+static float g_mem[MAX_BAR_COUNT];      // EMA smoothing memory
+static float g_peak[MAX_BAR_COUNT];     // gravity peak tracker
+static float g_fall[MAX_BAR_COUNT];     // gravity fall velocity
 static float g_sens;                    // auto-sensitivity (global gain)
 static bool  g_sensInit;                // fast initial ramp-up active
 static bool  g_inited = false;
@@ -109,27 +114,27 @@ static void initProcessor() {
     for (int i = 0; i < FFT_SIZE; i++)
         g_window[i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * i / (FFT_SIZE - 1)));
 
-    // Log-spaced frequency bin cutoffs
+    // Log-spaced frequency bin cutoffs (using runtime g_barCount / g_freqMax)
     float logMin = log10f(FREQ_MIN);
-    float logMax = log10f(FREQ_MAX);
-    int loCut[BAR_COUNT + 1];
-    for (int i = 0; i <= BAR_COUNT; i++) {
-        float f = powf(10.0f, logMin + (float)i / BAR_COUNT * (logMax - logMin));
+    float logMax = log10f(g_freqMax);
+    int loCut[MAX_BAR_COUNT + 1];
+    for (int i = 0; i <= g_barCount; i++) {
+        float f = powf(10.0f, logMin + (float)i / g_barCount * (logMax - logMin));
         loCut[i] = std::max(1, (int)roundf(f * FFT_SIZE / SAMPLE_RATE));
     }
     // Push up to guarantee each bar has at least 1 unique FFT bin (cava approach)
-    for (int i = 1; i <= BAR_COUNT; i++) {
+    for (int i = 1; i <= g_barCount; i++) {
         if (loCut[i] <= loCut[i - 1])
             loCut[i] = loCut[i - 1] + 1;
     }
-    for (int i = 0; i < BAR_COUNT; i++) {
+    for (int i = 0; i < g_barCount; i++) {
         g_binLo[i] = loCut[i];
         g_binHi[i] = std::max(loCut[i], loCut[i + 1] - 1);
         g_binHi[i] = std::min(g_binHi[i], FFT_SIZE / 2 - 1);
     }
 
     // Per-bar EQ: boost higher frequencies to balance typical music spectrum
-    for (int i = 0; i < BAR_COUNT; i++) {
+    for (int i = 0; i < g_barCount; i++) {
         float fCenter = (float)(g_binLo[i] + g_binHi[i]) * 0.5f
                         * (float)SAMPLE_RATE / (float)FFT_SIZE;
         g_eq[i] = powf(std::max(fCenter, (float)FREQ_MIN) / (float)FREQ_MIN, EQ_POWER);
@@ -183,8 +188,8 @@ static void processFrame(const float* newSamples, float* bars) {
     //    Silence is checked on raw PCM level vs threshold (matching cava's
     //    S16LE behavior where sub-16bit noise truncates to zero).
     bool silence = (audioMax < SILENCE_THRESHOLD);
-    float rawBars[BAR_COUNT];
-    for (int b = 0; b < BAR_COUNT; b++) {
+    float rawBars[MAX_BAR_COUNT];
+    for (int b = 0; b < g_barCount; b++) {
         float sum = 0.0f;
         int count = g_binHi[b] - g_binLo[b] + 1;
         for (int k = g_binLo[b]; k <= g_binHi[b]; k++)
@@ -201,7 +206,7 @@ static void processFrame(const float* newSamples, float* bars) {
     //    clamped at 1.0 for hundreds of milliseconds.  This EMA has gain=1.0
     //    so output never exceeds the input value — provably no lockup.
     bool overshoot = false;
-    for (int b = 0; b < BAR_COUNT; b++) {
+    for (int b = 0; b < g_barCount; b++) {
         float raw = rawBars[b];
 
         // (a) Asymmetric EMA: fast attack, slow decay (gain = 1.0).
@@ -227,7 +232,7 @@ static void processFrame(const float* newSamples, float* bars) {
         }
 
         // Overshoot detection for auto-sensitivity.
-        if (g_peak[b] > 1.0f) overshoot = true;
+        if (g_peak[b] > SENS_TARGET) overshoot = true;
 
         bars[b] = std::min(g_peak[b], 1.0f);
     }
@@ -252,10 +257,10 @@ static void processFrame(const float* newSamples, float* bars) {
     // Debug: log every 60 frames (1 second) so we can verify data flow
     if (++g_dbgFrame % 60 == 0) {
         float maxBar = 0.0f;
-        for (int b = 0; b < BAR_COUNT; b++)
+        for (int b = 0; b < g_barCount; b++)
             if (bars[b] > maxBar) maxBar = bars[b];
-        fprintf(stderr, "[vis-dbg] f=%d sens=%.3f maxBar=%.3f audioMax=%.6f bars[0]=%.3f [35]=%.3f [69]=%.3f\n",
-                g_dbgFrame, g_sens, maxBar, audioMax, bars[0], bars[35], bars[69]);
+        fprintf(stderr, "[vis-dbg] f=%d sens=%.3f maxBar=%.3f audioMax=%.6f bars[0]=%.3f [%d]=%.3f [%d]=%.3f\n",
+                g_dbgFrame, g_sens, maxBar, audioMax, bars[0], g_barCount/2, bars[g_barCount/2], g_barCount-1, bars[g_barCount-1]);
     }
 }
 

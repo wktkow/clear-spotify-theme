@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <string>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -72,6 +73,45 @@ int main() {
         return 1;
     }
 
+    // Dynamic send rate (default 30fps = 33ms)
+    std::atomic<int> sendIntervalMs{33};
+
+    // Handle text commands from WebSocket client.
+    // Windows WASAPI loopback always captures the default render device,
+    // so there are no selectable sources.  We respond to GET_SOURCES
+    // with a single "default" entry so the UI knows it's Windows.
+    ws.onText = [&](const std::string& msg) {
+        if (msg == "GET_SOURCES") {
+            ws.sendText("{\"sources\":[{\"name\":\"default\",\"desc\":\"Default Audio Output (WASAPI Loopback)\"}]}");
+        } else if (msg.rfind("SET_SOURCE:", 0) == 0) {
+            // No-op on Windows — always uses default loopback
+            ws.sendText("{\"sourceChanged\":\"default\"}");
+        } else if (msg.rfind("SET_FPS:", 0) == 0) {
+            int fps = std::atoi(msg.substr(8).c_str());
+            if (fps == 24 || fps == 30 || fps == 60) {
+                sendIntervalMs = 1000 / fps;
+                fprintf(stderr, "[vis] Send rate changed to %d fps (%d ms)\n", fps, sendIntervalMs.load());
+                ws.sendText("{\"fpsChanged\":" + std::to_string(fps) + "}");
+            }
+        } else if (msg.rfind("SET_FREQ_MAX:", 0) == 0) {
+            int freq = std::atoi(msg.substr(13).c_str());
+            if (freq == 10000 || freq == 12000 || freq == 14000 || freq == 16000 || freq == 18000) {
+                g_freqMax = (float)freq;
+                initProcessor();
+                fprintf(stderr, "[vis] Freq max changed to %d Hz\n", freq);
+                ws.sendText("{\"freqMaxChanged\":" + std::to_string(freq) + "}");
+            }
+        } else if (msg.rfind("SET_BAR_COUNT:", 0) == 0) {
+            int count = std::atoi(msg.substr(14).c_str());
+            if (count == 8 || count == 16 || count == 24 || count == 36 || count == 72 || count == 100 || count == 144) {
+                g_barCount = count;
+                initProcessor();
+                fprintf(stderr, "[vis] Bar count changed to %d\n", count);
+                ws.sendText("{\"barCountChanged\":" + std::to_string(count) + "}");
+            }
+        }
+    };
+
     // --- Initialize COM and WASAPI ---
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
@@ -121,7 +161,7 @@ int main() {
     initProcessor();
     float chunk[FRAME_SAMPLES];
     int chunkPos = 0;
-    float bars[BAR_COUNT];
+    float bars[MAX_BAR_COUNT];
     bool wasIdle = true;
 
     bool isFloat = (mixFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
@@ -129,6 +169,8 @@ int main() {
         WAVEFORMATEXTENSIBLE* ext = (WAVEFORMATEXTENSIBLE*)mixFormat;
         isFloat = (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
     }
+
+    auto lastSend = std::chrono::steady_clock::now();
 
     fprintf(stderr, "[vis] Waiting for client on ws://127.0.0.1:%d\n", WS_PORT);
 
@@ -145,7 +187,8 @@ int main() {
             initProcessor();
             chunkPos = 0;
             wasIdle = false;
-            fprintf(stderr, "[vis] Client connected, streaming at %d fps\n", SEND_FPS);
+            lastSend = std::chrono::steady_clock::now();
+            fprintf(stderr, "[vis] Client connected, streaming\n");
         }
 
         UINT32 packetLength = 0;
@@ -172,7 +215,11 @@ int main() {
                 chunk[chunkPos++] = mono[i];
                 if (chunkPos >= FRAME_SAMPLES) {
                     processFrame(chunk, bars);
-                    if (ws.hasClient()) ws.sendBinary(bars, sizeof(bars));
+                    auto now = std::chrono::steady_clock::now();
+                    if (ws.hasClient() && std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSend).count() >= sendIntervalMs.load()) {
+                        ws.sendBinary(bars, g_barCount * sizeof(float));
+                        lastSend = now;
+                    }
                     chunkPos = 0;
                 }
             }

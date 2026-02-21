@@ -482,6 +482,22 @@
       modal.appendChild(row);
     }
 
+    // Visualizer Settings button
+    {
+      const row = document.createElement("div");
+      row.className = "clear-settings-row";
+      row.innerHTML = `<div><div class="clear-settings-row-label">Audio Visualizer</div><div class="clear-settings-row-desc">Configure bars, framerate, and audio source</div></div>`;
+      const openBtn = document.createElement("button");
+      openBtn.className = "clear-settings-select";
+      openBtn.textContent = "Settings →";
+      openBtn.style.cursor = "pointer";
+      openBtn.addEventListener("click", () => {
+        openVisualizerSettings();
+      });
+      row.appendChild(openBtn);
+      modal.appendChild(row);
+    }
+
     // Close on overlay click
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) {
@@ -805,29 +821,250 @@
 
   initLyricsFade();
 
+  // --- Visualizer Settings Modal ---
+  function openVisualizerSettings() {
+    if (document.querySelector(".clear-vis-settings-overlay")) {
+      document
+        .querySelector(".clear-vis-settings-overlay")
+        .classList.add("clear-vis-settings-overlay--open");
+      return;
+    }
+
+    const settings = loadSettings();
+
+    const overlay = document.createElement("div");
+    overlay.className =
+      "clear-vis-settings-overlay clear-vis-settings-overlay--open";
+
+    const modal = document.createElement("div");
+    modal.className = "clear-vis-settings-modal";
+
+    // Header
+    const header = document.createElement("div");
+    header.className = "clear-settings-header";
+    header.innerHTML = `<span class="clear-settings-title">Visualizer Settings</span>`;
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "clear-settings-close";
+    closeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3.293 3.293a1 1 0 0 1 1.414 0L12 10.586l7.293-7.293a1 1 0 1 1 1.414 1.414L13.414 12l7.293 7.293a1 1 0 0 1-1.414 1.414L12 13.414l-7.293 7.293a1 1 0 0 1-1.414-1.414L10.586 12 3.293 4.707a1 1 0 0 1 0-1.414"/></svg>`;
+    closeBtn.addEventListener("click", () => {
+      overlay.classList.remove("clear-vis-settings-overlay--open");
+      setTimeout(() => overlay.remove(), 150);
+    });
+    header.appendChild(closeBtn);
+    modal.appendChild(header);
+
+    // --- Bar Opacity slider ---
+    {
+      const row = document.createElement("div");
+      row.className = "clear-settings-row";
+      const savedOpacity =
+        settings.visBarOpacity != null ? settings.visBarOpacity : 1.0;
+      row.innerHTML = `<div><div class="clear-settings-row-label">Bar Opacity</div><div class="clear-settings-row-desc">Transparency of the visualizer bars</div></div>`;
+      const wrapper = document.createElement("div");
+      wrapper.className = "clear-vis-slider-wrapper";
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.className = "clear-vis-slider";
+      slider.min = "0.1";
+      slider.max = "1.0";
+      slider.step = "0.05";
+      slider.value = String(savedOpacity);
+      const valLabel = document.createElement("span");
+      valLabel.className = "clear-vis-slider-value";
+      valLabel.textContent = Number(savedOpacity).toFixed(2);
+      slider.addEventListener("input", () => {
+        const val = parseFloat(slider.value);
+        valLabel.textContent = val.toFixed(2);
+        const s = loadSettings();
+        s.visBarOpacity = val;
+        saveSettings(s);
+        if (visualizerApi) visualizerApi.applyOpacity(val);
+      });
+      wrapper.appendChild(slider);
+      wrapper.appendChild(valLabel);
+      row.appendChild(wrapper);
+      modal.appendChild(row);
+    }
+
+    // --- Framerate switches ---
+    {
+      const row = document.createElement("div");
+      row.className = "clear-settings-row";
+      row.innerHTML = `<div><div class="clear-settings-row-label">Framerate</div><div class="clear-settings-row-desc">How often the bars update per second</div></div>`;
+      const btnGroup = document.createElement("div");
+      btnGroup.className = "clear-vis-fps-group";
+      const savedFps = settings.visFps || 30;
+      [24, 30, 60].forEach((fps) => {
+        const btn = document.createElement("button");
+        btn.className =
+          "clear-vis-fps-btn" +
+          (savedFps === fps ? " clear-vis-fps-btn--active" : "");
+        btn.textContent = fps + " fps";
+        btn.addEventListener("click", () => {
+          btnGroup
+            .querySelectorAll(".clear-vis-fps-btn")
+            .forEach((b) => b.classList.remove("clear-vis-fps-btn--active"));
+          btn.classList.add("clear-vis-fps-btn--active");
+          const s = loadSettings();
+          s.visFps = fps;
+          saveSettings(s);
+          if (visualizerApi) visualizerApi.setFps(fps);
+        });
+        btnGroup.appendChild(btn);
+      });
+      row.appendChild(btnGroup);
+      modal.appendChild(row);
+    }
+
+    // --- Frequency Cutoff ---
+    {
+      const row = document.createElement("div");
+      row.className = "clear-settings-row";
+      row.innerHTML = `<div><div class="clear-settings-row-label">Frequency Range</div><div class="clear-settings-row-desc">Upper cutoff point (50 Hz – selected)</div></div>`;
+      const btnGroup = document.createElement("div");
+      btnGroup.className = "clear-vis-fps-group";
+      const savedFreq = settings.visFreqMax || 12000;
+      [10000, 12000, 14000, 16000, 18000].forEach((freq) => {
+        const btn = document.createElement("button");
+        btn.className =
+          "clear-vis-fps-btn" +
+          (savedFreq === freq ? " clear-vis-fps-btn--active" : "");
+        btn.textContent = freq / 1000 + "kHz";
+        btn.addEventListener("click", () => {
+          btnGroup
+            .querySelectorAll(".clear-vis-fps-btn")
+            .forEach((b) => b.classList.remove("clear-vis-fps-btn--active"));
+          btn.classList.add("clear-vis-fps-btn--active");
+          const s = loadSettings();
+          s.visFreqMax = freq;
+          saveSettings(s);
+          if (visualizerApi) visualizerApi.setFreqMax(freq);
+        });
+        btnGroup.appendChild(btn);
+      });
+      row.appendChild(btnGroup);
+      modal.appendChild(row);
+    }
+
+    // --- Bar Count ---
+    {
+      const row = document.createElement("div");
+      row.className = "clear-settings-row";
+      row.innerHTML = `<div><div class="clear-settings-row-label">Bar Count</div><div class="clear-settings-row-desc">Number of frequency bands displayed</div></div>`;
+      const btnGroup = document.createElement("div");
+      btnGroup.className = "clear-vis-fps-group";
+      const savedBars = settings.visBarCount || 72;
+      [8, 16, 24, 36, 72, 100, 144].forEach((count) => {
+        const btn = document.createElement("button");
+        btn.className =
+          "clear-vis-fps-btn" +
+          (savedBars === count ? " clear-vis-fps-btn--active" : "");
+        btn.textContent = String(count);
+        btn.addEventListener("click", () => {
+          btnGroup
+            .querySelectorAll(".clear-vis-fps-btn")
+            .forEach((b) => b.classList.remove("clear-vis-fps-btn--active"));
+          btn.classList.add("clear-vis-fps-btn--active");
+          const s = loadSettings();
+          s.visBarCount = count;
+          saveSettings(s);
+          if (visualizerApi) visualizerApi.setBarCount(count);
+        });
+        btnGroup.appendChild(btn);
+      });
+      row.appendChild(btnGroup);
+      modal.appendChild(row);
+    }
+
+    // --- Audio Source dropdown ---
+    {
+      const row = document.createElement("div");
+      row.className = "clear-settings-row";
+      row.innerHTML = `<div><div class="clear-settings-row-label">Audio Source</div><div class="clear-settings-row-desc">Which audio output to visualize</div></div>`;
+      const select = document.createElement("select");
+      select.className = "clear-settings-select";
+
+      const savedSource = settings.audioSource || "";
+
+      const defaultOpt = document.createElement("option");
+      defaultOpt.value = "@DEFAULT_MONITOR@";
+      defaultOpt.textContent = "System Default";
+      if (!savedSource || savedSource === "@DEFAULT_MONITOR@")
+        defaultOpt.selected = true;
+      select.appendChild(defaultOpt);
+
+      function populateSources(sources) {
+        while (select.options.length > 1) select.remove(1);
+        sources.forEach((src) => {
+          const opt = document.createElement("option");
+          opt.value = src.name;
+          opt.textContent = src.desc || src.name;
+          if (savedSource === src.name) opt.selected = true;
+          select.appendChild(opt);
+        });
+      }
+
+      if (visualizerApi) {
+        populateSources(visualizerApi.getAudioSources());
+        visualizerApi.onSourcesUpdated(populateSources);
+        const origRemove = overlay.remove.bind(overlay);
+        overlay.remove = () => {
+          visualizerApi.removeSourceCallback(populateSources);
+          origRemove();
+        };
+        visualizerApi.requestSources();
+      }
+
+      select.addEventListener("change", () => {
+        const s = loadSettings();
+        s.audioSource = select.value;
+        saveSettings(s);
+        if (visualizerApi) visualizerApi.setSource(select.value);
+      });
+
+      row.appendChild(select);
+      modal.appendChild(row);
+    }
+
+    // Close on overlay click
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        overlay.classList.remove("clear-vis-settings-overlay--open");
+        setTimeout(() => overlay.remove(), 150);
+      }
+    });
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  }
+
   // --- Audio Visualizer ---
   // Connects to a native audio capture daemon via WebSocket on localhost:7700.
   // The daemon captures real audio output (PulseAudio/PipeWire on Linux,
-  // WASAPI loopback on Windows), performs FFT, and sends 70 frequency bars.
+  // WASAPI loopback on Windows), performs FFT, and sends 72 frequency bars.
   function initVisualizer() {
-    const BAR_COUNT = 70;
+    const MAX_BAR_COUNT = 144;
     const WS_PORT = 7700;
     const WS_RECONNECT_MS = 2000;
 
+    let barCount = loadSettings().visBarCount || 72;
+
     let active = false;
-    let animId = null;
     let overlay = null;
-    let canvas = null;
-    let ctx = null;
+    let barContainer = null;
+    const barEls = []; // bar div elements, rebuilt on count change
     let msgEl = null;
 
     // WebSocket state
     let ws = null;
     let wsConnected = false;
-    const wsData = new Float32Array(BAR_COUNT);
+    const wsData = new Float32Array(MAX_BAR_COUNT);
     let reconnectTimer = null;
     let lastMsgTime = 0;
-    let lastDiagTime = 0;
+
+    // Audio source management
+    let audioSources = []; // [{name, desc},...] from daemon
+    let audioSourceCallbacks = []; // listeners for source list updates
 
     // --- WebSocket connection to native audio capture ---
     function connectWs() {
@@ -858,11 +1095,48 @@
         wsConnected = true;
         hideMessage();
         console.log("[VIS] WebSocket connected to audio bridge");
+        // Request available audio sources
+        ws.send("GET_SOURCES");
+        // Apply saved source if user previously selected one
+        const s = loadSettings();
+        if (s.audioSource) {
+          ws.send("SET_SOURCE:" + s.audioSource);
+        }
+        // Apply saved FPS
+        const fps = s.visFps || 30;
+        ws.send("SET_FPS:" + fps);
+        // Apply saved frequency range
+        const freqMax = s.visFreqMax || 12000;
+        ws.send("SET_FREQ_MAX:" + freqMax);
+        // Apply saved bar count
+        const bc = s.visBarCount || 72;
+        ws.send("SET_BAR_COUNT:" + bc);
       };
 
       let frameCount = 0;
       ws.onmessage = async (e) => {
         try {
+          // Text message = JSON command response from daemon
+          if (typeof e.data === "string") {
+            try {
+              const msg = JSON.parse(e.data);
+              if (msg.sources) {
+                audioSources = msg.sources;
+                console.log("[VIS] Got", audioSources.length, "audio sources");
+                audioSourceCallbacks.forEach((cb) => cb(audioSources));
+              }
+              if (msg.sourceChanged) {
+                console.log("[VIS] Source changed to:", msg.sourceChanged);
+              }
+              if (msg.sourceError) {
+                console.warn("[VIS] Source error:", msg.sourceError);
+              }
+            } catch (je) {
+              console.warn("[VIS] Bad JSON from daemon:", je);
+            }
+            return;
+          }
+          // Binary message = audio bar data
           let buf;
           if (e.data instanceof ArrayBuffer) {
             buf = e.data;
@@ -872,14 +1146,16 @@
             return;
           }
           const data = new Float32Array(buf);
-          const len = Math.min(BAR_COUNT, data.length);
+          const len = Math.min(barCount, data.length);
           for (let i = 0; i < len; i++) wsData[i] = data[i];
           lastMsgTime = performance.now();
+          // Draw bars immediately on each snapshot from daemon
+          drawBars();
           frameCount++;
           if (frameCount <= 3) {
-            const sample = [data[0], data[10], data[30], data[50], data[69]];
+            const sample = [data[0], data[5], data[11], data[17], data[23]];
             console.log(
-              `[VIS] frame#${frameCount}: ${data.length} floats, sample:`,
+              `[VIS] snapshot#${frameCount}: ${data.length} floats, sample:`,
               sample.map((v) => v.toFixed(4)).join(", "),
             );
           }
@@ -957,12 +1233,12 @@
       msgEl.querySelector(".clear-visualizer-message-title").textContent =
         title;
       msgEl.querySelector(".clear-visualizer-message-text").textContent = text;
-      if (canvas) canvas.style.display = "none";
+      if (barContainer) barContainer.style.display = "none";
     }
 
     function hideMessage() {
       if (msgEl) msgEl.style.display = "none";
-      if (canvas) canvas.style.display = "block";
+      if (barContainer) barContainer.style.display = "flex";
     }
 
     // --- Overlay creation ---
@@ -974,10 +1250,31 @@
       overlay = document.createElement("div");
       overlay.id = "clear-visualizer-overlay";
 
-      canvas = document.createElement("canvas");
-      canvas.id = "clear-visualizer-canvas";
-      canvas.style.cssText = "position:absolute;inset:0;display:none;";
-      overlay.appendChild(canvas);
+      // Bar container: flexbox row, bars aligned to bottom
+      barContainer = document.createElement("div");
+      barContainer.id = "clear-visualizer-bars";
+      barContainer.style.cssText =
+        "position:absolute;inset:0;display:none;" +
+        "display:flex;align-items:flex-end;justify-content:center;" +
+        "gap:6px;padding:16px;box-sizing:border-box;";
+
+      // Create bar divs (dynamic count)
+      const savedOpacity =
+        loadSettings().visBarOpacity != null
+          ? loadSettings().visBarOpacity
+          : 1.0;
+      barEls.length = 0;
+      for (let i = 0; i < barCount; i++) {
+        const bar = document.createElement("div");
+        bar.style.cssText =
+          "flex:1;min-width:0;height:2px;" +
+          "background:white;opacity:" +
+          savedOpacity +
+          ";border-radius:3px 3px 0 0;";
+        barContainer.appendChild(bar);
+        barEls.push(bar);
+      }
+      overlay.appendChild(barContainer);
 
       msgEl = document.createElement("div");
       msgEl.className = "clear-visualizer-message";
@@ -1000,82 +1297,14 @@
         mainView.style.position = "relative";
       }
       mainView.appendChild(overlay);
-      ctx = canvas.getContext("2d");
-      if (ctx) {
-        console.log("[VIS] Canvas2D initialized");
-      } else {
-        console.warn("[VIS] Canvas2D init failed");
-      }
     }
 
-    function resizeCanvas() {
-      if (!canvas || !overlay) return;
-      const dpr = window.devicePixelRatio || 1;
-      const tw = Math.round(overlay.clientWidth * dpr);
-      const th = Math.round(overlay.clientHeight * dpr);
-      if (canvas.width !== tw || canvas.height !== th) {
-        canvas.width = tw;
-        canvas.height = th;
-      }
-    }
-
-    // --- Render loop (Canvas2D) ---
-    function render() {
-      if (!active) return;
-      animId = requestAnimationFrame(render);
-      if (!ctx) return;
-
-      // Zero bars if daemon stopped mid-stream (no data for 1 second).
-      if (lastMsgTime > 0 && performance.now() - lastMsgTime > 1000) {
-        wsData.fill(0);
-        lastMsgTime = 0;
-      }
-
-      // Diagnostic: log bar values every 2 seconds
-      const now = performance.now();
-      if (now - lastDiagTime > 2000 && lastMsgTime > 0) {
-        console.log(
-          "[VIS-DIAG] bars[0,10,30,50,69]:",
-          [wsData[0], wsData[10], wsData[30], wsData[50], wsData[69]]
-            .map((v) => v.toFixed(3))
-            .join(", "),
-        );
-        lastDiagTime = now;
-      }
-
-      resizeCanvas();
-      const W = canvas.width;
-      const H = canvas.height;
-      if (W === 0 || H === 0) return;
-
-      ctx.clearRect(0, 0, W, H);
-
-      // Bar layout
-      const padX = 16,
-        padY = 16,
-        gap = 2;
-      const usable = W - padX * 2;
-      const barW = (usable - gap * (BAR_COUNT - 1)) / BAR_COUNT;
-      const maxH = H - padY * 2;
-      const radius = Math.min(barW * 0.4, 3);
-
-      for (let i = 0; i < BAR_COUNT; i++) {
+    // --- Update bar heights (called once per WebSocket snapshot) ---
+    function drawBars() {
+      for (let i = 0; i < barCount; i++) {
         const v = wsData[i];
-        const h = Math.max(2, v * maxH);
-        const a = 0.3 + v * 0.7;
-        const x = padX + i * (barW + gap);
-        const y = H - padY - h;
-
-        ctx.fillStyle = `rgba(255,255,255,${a})`;
-        // Rounded top corners
-        ctx.beginPath();
-        ctx.moveTo(x, H - padY);
-        ctx.lineTo(x, y + radius);
-        ctx.arcTo(x, y, x + radius, y, radius);
-        ctx.arcTo(x + barW, y, x + barW, y + radius, radius);
-        ctx.lineTo(x + barW, H - padY);
-        ctx.closePath();
-        ctx.fill();
+        const pct = Math.max(0.3, v * 100); // min 0.3% so bars are visible
+        barEls[i].style.height = pct + "%";
       }
     }
 
@@ -1089,20 +1318,120 @@
         if (btn) btn.classList.add("clear-visualizer-btn--active");
         wsData.fill(0);
         connectWs();
-        animId = requestAnimationFrame(render);
       } else {
         if (overlay) overlay.classList.remove("clear-visualizer-overlay--open");
-        if (animId) cancelAnimationFrame(animId);
-        animId = null;
         disconnectWs();
         if (btn) btn.classList.remove("clear-visualizer-btn--active");
       }
     }
 
     waitForButton();
+
+    // Expose source management API for settings modal
+    return {
+      getAudioSources: () => audioSources,
+      onSourcesUpdated: (cb) => {
+        audioSourceCallbacks.push(cb);
+        if (audioSources.length > 0) cb(audioSources);
+      },
+      removeSourceCallback: (cb) => {
+        audioSourceCallbacks = audioSourceCallbacks.filter((c) => c !== cb);
+      },
+      setSource: (name) => {
+        if (ws && wsConnected) {
+          ws.send("SET_SOURCE:" + name);
+        }
+        const s = loadSettings();
+        s.audioSource = name;
+        saveSettings(s);
+      },
+      setFps: (fps) => {
+        if (ws && wsConnected) {
+          ws.send("SET_FPS:" + fps);
+        }
+      },
+      setFreqMax: (freq) => {
+        if (ws && wsConnected) {
+          ws.send("SET_FREQ_MAX:" + freq);
+        }
+      },
+      setBarCount: (count) => {
+        barCount = count;
+        // Rebuild bar divs to match new count
+        if (barContainer) {
+          barContainer.innerHTML = "";
+          barEls.length = 0;
+          const opacity =
+            loadSettings().visBarOpacity != null
+              ? loadSettings().visBarOpacity
+              : 1.0;
+          for (let i = 0; i < barCount; i++) {
+            const bar = document.createElement("div");
+            bar.style.cssText =
+              "flex:1;min-width:0;height:2px;" +
+              "background:white;opacity:" +
+              opacity +
+              ";border-radius:3px 3px 0 0;";
+            barContainer.appendChild(bar);
+            barEls.push(bar);
+          }
+          wsData.fill(0);
+        }
+        if (ws && wsConnected) {
+          ws.send("SET_BAR_COUNT:" + count);
+        }
+      },
+      applyOpacity: (val) => {
+        barEls.forEach((el) => {
+          el.style.opacity = String(val);
+        });
+      },
+      // Fetch sources from daemon — uses the active visualizer WS if open,
+      // otherwise opens a temporary connection just for the query.
+      requestSources: () => {
+        if (ws && wsConnected) {
+          ws.send("GET_SOURCES");
+          return;
+        }
+        // No active connection — open a temporary one
+        try {
+          const tmp = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+          tmp.binaryType = "arraybuffer";
+          tmp.onopen = () => {
+            tmp.send("GET_SOURCES");
+          };
+          tmp.onmessage = (e) => {
+            // Ignore binary audio frames — we only care about the text response
+            if (typeof e.data !== "string") return;
+            try {
+              const msg = JSON.parse(e.data);
+              if (msg.sources) {
+                audioSources = msg.sources;
+                audioSourceCallbacks.forEach((cb) => cb(audioSources));
+              }
+            } catch {}
+            // Got our sources — close the temp connection
+            try {
+              tmp.close();
+            } catch {}
+          };
+          tmp.onerror = () => {
+            try {
+              tmp.close();
+            } catch {}
+          };
+          // Safety: close after 3s no matter what
+          setTimeout(() => {
+            try {
+              tmp.close();
+            } catch {}
+          }, 3000);
+        } catch {}
+      },
+    };
   }
 
-  initVisualizer();
+  const visualizerApi = initVisualizer();
 
   // --- Fade out startup splash (wait for full page load + images) ---
   if (loadSettings().splashScreen !== false) {
