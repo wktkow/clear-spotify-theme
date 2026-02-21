@@ -78,8 +78,11 @@ if flatpak list --user 2>/dev/null | grep -q com.spotify.Client; then
     # Unmask first in case it was masked from a previous run
     flatpak mask --user --remove com.spotify.Client 2>/dev/null || true
     yellow "User Flatpak Spotify found — removing for clean install"
-    flatpak uninstall --user -y --noninteractive com.spotify.Client 2>/dev/null || true
-    green "User Flatpak Spotify removed"
+    if flatpak uninstall --user -y --noninteractive com.spotify.Client 2>/dev/null; then
+        green "User Flatpak Spotify removed"
+    else
+        yellow "Could not remove user Flatpak Spotify — will install over it"
+    fi
 fi
 
 # Remove system-wide Flatpak Spotify
@@ -134,8 +137,11 @@ else
 fi
 
 # Block future updates
-flatpak mask --user com.spotify.Client 2>/dev/null || true
-green "Spotify auto-updates blocked (flatpak mask)"
+if flatpak mask --user com.spotify.Client 2>/dev/null; then
+    green "Spotify auto-updates blocked (flatpak mask)"
+else
+    yellow "Could not mask Spotify updates — run 'flatpak mask --user com.spotify.Client' manually"
+fi
 
 # Verify installed version
 INSTALLED_VER=$(flatpak info --user com.spotify.Client 2>/dev/null | grep "Version:" | awk '{print $2}' || true)
@@ -319,9 +325,9 @@ else
             # Install and enable systemd user service
             mkdir -p "$HOME/.config/systemd/user"
             cp "$BUILD_DIR/native/linux/clear-vis.service" "$HOME/.config/systemd/user/"
-            systemctl --user daemon-reload
-            systemctl --user enable clear-vis.service
-            systemctl --user start clear-vis.service
+            systemctl --user daemon-reload || true
+            systemctl --user enable clear-vis.service || true
+            systemctl --user start clear-vis.service || true
             sleep 1
             if systemctl --user is-active --quiet clear-vis.service; then
                 green "Audio visualizer daemon is running (auto-starts on login)"

@@ -3,6 +3,7 @@
 > **Flatpak is required.** No other Spotify installation method (Snap, native deb) is supported.
 >
 > The installer removes any existing Spotify and Spicetify installations, then installs:
+>
 > - **Spotify** `1.2.74.477.g3be53afe` (Flatpak, pinned and masked against auto-updates)
 > - **Spicetify** `v2.42.11` (from GitHub releases)
 

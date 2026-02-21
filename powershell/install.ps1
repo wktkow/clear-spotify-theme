@@ -180,6 +180,11 @@ function Install-SpotifyFromFile {
     Write-Ok "SHA256 verified"
     $proc = Start-Process -FilePath $InstallerPath -PassThru
     $proc | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
+    if (-not $proc.HasExited) {
+        Write-Warn "Installer timed out — killing orphan process"
+        $proc | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
     Start-Sleep -Seconds 5
     Get-Process -Name "Spotify" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
@@ -360,7 +365,7 @@ foreach ($file in $themeFiles) {
     } catch {
         Write-Host "   Failed to download $file from $url" -ForegroundColor Red
         Write-Host "   Error: $_" -ForegroundColor Red
-        Exit-WithError
+        Exit-WithError "Theme file download failed — check your internet connection."
     }
 }
 
@@ -368,30 +373,30 @@ foreach ($file in $themeFiles) {
 Write-Step "Configuring spicetify"
 
 & spicetify config current_theme $themeName
-Write-Ok "Theme set to $themeName"
+if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to set theme (exit code $LASTEXITCODE)" }
+else { Write-Ok "Theme set to $themeName" }
 
 & spicetify config inject_theme_js 1
-Write-Ok "Theme JS injection enabled"
+if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to enable JS injection (exit code $LASTEXITCODE)" }
+else { Write-Ok "Theme JS injection enabled" }
 
 & spicetify config color_scheme ""
-Write-Ok "Color scheme reset to default"
+if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to reset color scheme (exit code $LASTEXITCODE)" }
+else { Write-Ok "Color scheme reset to default" }
 
 # ── 9. Apply ────────────────────────────────────────────────────────────────
 Write-Step "Applying theme"
-try {
-    & spicetify backup apply
-    Write-Ok "Theme applied successfully"
-} catch {
-    Write-Warn "spicetify backup apply failed, trying apply only..."
-    try {
-        & spicetify apply
-        Write-Ok "Theme applied successfully"
-    } catch {
-        Write-Host "   Failed to apply theme: $_" -ForegroundColor Red
+& spicetify backup apply 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warn "spicetify backup apply failed (exit code $LASTEXITCODE), trying apply only..."
+    & spicetify apply 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   Failed to apply theme (exit code $LASTEXITCODE)" -ForegroundColor Red
         Write-Host "   Try running 'spicetify restore backup apply' manually." -ForegroundColor Yellow
-        Exit-WithError
+        Exit-WithError "spicetify apply failed"
     }
 }
+Write-Ok "Theme applied successfully"
 
 # ── 10. Build and install audio visualizer daemon ─────────────────────────────
 Write-Step "Setting up audio visualizer daemon"
