@@ -28,17 +28,28 @@ function Write-Step($msg) { Write-Host "`n>> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "   $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "   $msg" -ForegroundColor Yellow }
 
+function Exit-WithError {
+    Write-Host ""
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
 # ── 1. Ensure spicetify is installed ─────────────────────────────────────────
 Write-Step "Checking spicetify installation"
 $spicetifyCmd = Get-Command spicetify -ErrorAction SilentlyContinue
 if (-not $spicetifyCmd) {
     Write-Warn "spicetify not found — installing automatically..."
     try {
+        # Disable strict mode — the spicetify installer uses uninitialized
+        # variables ($v) that blow up under Set-StrictMode -Version Latest.
+        Set-StrictMode -Off
         Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/spicetify/cli/main/install.ps1" | Invoke-Expression
     } catch {
         Write-Host "`n   Failed to install spicetify: $_" -ForegroundColor Red
         Write-Host "   Install it manually: https://spicetify.app" -ForegroundColor Red
-        exit 1
+        Exit-WithError
+    } finally {
+        Set-StrictMode -Version Latest
     }
 
     # Refresh PATH so we can find the new binary
@@ -55,7 +66,7 @@ if (-not $spicetifyCmd) {
     if (-not $spicetifyCmd) {
         Write-Host "`n   spicetify installed but not found in PATH." -ForegroundColor Red
         Write-Host "   Close and reopen PowerShell, then run this script again." -ForegroundColor Yellow
-        exit 1
+        Exit-WithError
     }
     Write-Ok "spicetify installed successfully"
 } else {
@@ -107,7 +118,7 @@ if (-not $spicetifyDir -or -not (Test-Path $spicetifyDir)) {
     if (-not $spicetifyDir -or -not (Test-Path $spicetifyDir)) {
         Write-Host "`n   Could not find spicetify config directory." -ForegroundColor Red
         Write-Host "   Make sure Spotify Desktop is installed and has been opened at least once." -ForegroundColor Red
-        exit 1
+        Exit-WithError
     }
 }
 Write-Ok "Config directory: $spicetifyDir"
@@ -170,7 +181,7 @@ foreach ($file in $themeFiles) {
     } catch {
         Write-Host "   Failed to download $file from $url" -ForegroundColor Red
         Write-Host "   Error: $_" -ForegroundColor Red
-        exit 1
+        Exit-WithError
     }
 }
 
@@ -202,7 +213,7 @@ try {
     } catch {
         Write-Host "   Failed to apply theme: $_" -ForegroundColor Red
         Write-Host "   Try running 'spicetify restore backup apply' manually." -ForegroundColor Yellow
-        exit 1
+        Exit-WithError
     }
 }
 
