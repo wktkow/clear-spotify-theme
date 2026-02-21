@@ -1341,9 +1341,16 @@ button.main-playPauseButton-button {
 /* Windows 11 frame overlap fix – the OS draws an invisible ~8px resize grip
    inside the top of every window, and -webkit-app-region:drag on the topBar
    underneath lets Windows treat the area as a title-bar (snap-layout popup).
-   Push the bar below the grip zone and mark it no-drag so events reach CSS. */
+   Push the bar below the grip zone and mark it no-drag so events reach CSS.
+   Also covers kebab dropdown and settings/vis-settings modals. */
 #global-nav-bar,
-#global-nav-bar * {
+#global-nav-bar *,
+.clear-kebab-dropdown,
+.clear-kebab-dropdown *,
+.clear-settings-overlay,
+.clear-settings-overlay *,
+.clear-vis-settings-overlay,
+.clear-vis-settings-overlay * {
   -webkit-app-region: no-drag !important;
 }
 .spotify__os--is-windows #global-nav-bar {
