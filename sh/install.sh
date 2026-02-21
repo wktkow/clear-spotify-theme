@@ -12,7 +12,7 @@ SPICETIFY_VERSION="2.42.11"
 SPOTIFY_VERSION="1.2.74.477.g3be53afe"
 MARKETPLACE_VERSION="1.0.8"
 SPOTIFY_FLATPAK_COMMIT="d0881734d9f85a709418c4e671116b0c87baf24eebfa2a47a473d11fefe8f223"
-SPICETIFY_TAR_URL="https://github.com/spicetify/cli/releases/download/v${SPICETIFY_VERSION}/spicetify-${SPICETIFY_VERSION}-linux-amd64.tar.gz"
+SPICETIFY_TAR_URL="https://github.com/wktkow/clear-spotify-client/raw/main/installers/spicetify-${SPICETIFY_VERSION}-linux-amd64.tar.gz"
 # ─────────────────────────────────────────────────────────────────────────────
 
 REPO="wktkow/clear-spotify-client"
