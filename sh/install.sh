@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-REPO="wktkow/clear-spotify-theme"
+REPO="wktkow/clear-spotify-client"
 BRANCH="main"
 BASE_URL="https://raw.githubusercontent.com/$REPO/$BRANCH"
 THEME_FILES=("user.css" "color.ini" "theme.js")
