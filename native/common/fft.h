@@ -1,47 +1,50 @@
 // fft.h — Audio processor for the Spotify visualizer.
 // Sliding-window FFT, log-frequency binning, per-bar EQ,
-// auto-sensitivity, gravity falloff, and integral accumulator.
-// Matches cava's actual signal processing pipeline from cavacore.c.
+// auto-sensitivity, asymmetric EMA smoothing, and gravity falloff.
+// Uses simple gain=1.0 EMA instead of cava's integral accumulator
+// to guarantee bars cannot lock up at max values.
 // Header-only, no external dependencies.
 #ifndef VIS_FFT_H
 #define VIS_FFT_H
 
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <algorithm>
 #include "protocol.h"
 
-// ---- Tuning constants (matched to cava defaults) ----
+// ---- Tuning constants ----
 
-// Integral filter: IIR accumulator (mem = mem * NR + input).
-// This is cava's actual "noise reduction" filter — an integral that
-// amplifies sustained signals (~4.3x at steady state with NR=0.77)
-// and provides smooth exponential decay when input drops.
-constexpr float NOISE_REDUCTION = 0.77f;
+// Asymmetric EMA smoothing (gain = 1.0, no amplification).
+// On rise: fast attack — 60% weight on new value gives ~4 frame convergence.
+// On fall: slow decay — 15% weight gives smooth ~4.3 frame half-life.
+// Unlike cava's integral accumulator (gain=4.35x), this CAN'T exceed the
+// input value, so bars never get stuck at 1.0 waiting for mem to drain.
+constexpr float SMOOTH_ATTACK = 0.4f;   // EMA alpha when rising
+constexpr float SMOOTH_DECAY  = 0.85f;  // EMA alpha when falling
 
-// Gravity: multiplicative falloff from peak (cava's formula).
-// output = peak * (1 - fall^2 * gravity_mod), fall += 0.028/frame.
-// gravity_mod = pow(60/fps, 2.5) * 1.54 / NR  (= 2.0 at 60fps, NR=0.77).
-// Applied BEFORE integral smoothing (matching cava's actual order).
-constexpr float GRAVITY_FALL_INCR = 0.028f;
+// Gravity: constant-acceleration fall from peak position.
+// velocity += GRAVITY each frame; peak -= velocity each frame.
+// From peak=1.0 to 0 takes ~22 frames (367ms at 60fps).
+constexpr float GRAVITY       = 0.004f;
 
 // Silence threshold: float32 PA captures microscopic warmup noise
-// that cava never sees (cava uses S16LE where it truncates to zero).
-// Treat anything below 16-bit noise floor as silence to prevent
-// auto-sensitivity from ramping during inaudible noise.
+// that would be zero in cava's S16LE format.  Anything below this
+// is treated as silence to prevent auto-sensitivity drift.
 constexpr float SILENCE_THRESHOLD = 1e-4f;
 
 // Auto-sensitivity (global gain).
-// attack 0.98 per frame on overshoot, release 1.001 per frame.
-// sens_init mode ramps fast (1.1x/frame) until first overshoot,
-// capped at SENS_INIT_CAP as safety net for float32 edge cases.
+// Attack 0.85 per frame on overshoot (fast convergence — 7 frames
+// from 3.0 to 1.0 instead of 148 frames with cava's 0.98).
+// Release 1.002 per frame when quiet.
+// sensInit ramps at 1.1x/frame until first overshoot.
 constexpr float SENS_INIT       = 1.0f;
-constexpr float SENS_ATTACK     = 0.98f;
-constexpr float SENS_RELEASE    = 1.001f;
+constexpr float SENS_ATTACK     = 0.85f;
+constexpr float SENS_RELEASE    = 1.002f;
 constexpr float SENS_INIT_BOOST = 1.1f;
-constexpr float SENS_INIT_CAP   = 2.0f;
+constexpr float SENS_INIT_CAP   = 5.0f;
 constexpr float SENS_MIN        = 0.02f;
-constexpr float SENS_MAX        = 20.0f;
+constexpr float SENS_MAX        = 5.0f;
 
 // Per-bar EQ: pow(freq/FREQ_MIN, EQ_POWER).
 // Boosts high-frequency bars to compensate for music having more
@@ -93,13 +96,13 @@ static float g_window[FFT_SIZE];        // Hann window (full FFT buffer)
 static int   g_binLo[BAR_COUNT];        // FFT bin lower bound per bar
 static int   g_binHi[BAR_COUNT];        // FFT bin upper bound per bar
 static float g_eq[BAR_COUNT];           // per-bar EQ weight
-static float g_mem[BAR_COUNT];          // smoothing memory
+static float g_mem[BAR_COUNT];          // EMA smoothing memory
 static float g_peak[BAR_COUNT];         // gravity peak tracker
 static float g_fall[BAR_COUNT];         // gravity fall velocity
-static float g_prev[BAR_COUNT];         // previous gravity output (pre-integral)
 static float g_sens;                    // auto-sensitivity (global gain)
 static bool  g_sensInit;                // fast initial ramp-up active
 static bool  g_inited = false;
+static int   g_dbgFrame = 0;            // debug frame counter
 
 static void initProcessor() {
     // Hann window sized to full FFT buffer
@@ -136,10 +139,10 @@ static void initProcessor() {
     memset(g_mem, 0, sizeof(g_mem));
     memset(g_peak, 0, sizeof(g_peak));
     memset(g_fall, 0, sizeof(g_fall));
-    memset(g_prev, 0, sizeof(g_prev));
     g_sens = SENS_INIT;
     g_sensInit = true;
     g_inited = true;
+    g_dbgFrame = 0;
 }
 
 // Process one frame of FRAME_SAMPLES fresh audio.
@@ -193,49 +196,46 @@ static void processFrame(const float* newSamples, float* bars) {
         rawBars[b] = sqrtf(norm) * g_eq[b] * g_sens;
     }
 
-    // 5. Gravity + integral smoothing (cava's actual pipeline).
-    //    Order: (a) gravity falloff, (b) integral accumulator.
-    //    Previous rounds had this backwards, causing lockup.
-    //    gravity_mod adjusts for framerate: pow(60/fps,2.5)*1.54/NR
-    float gravity_mod = powf(60.0f / (float)SEND_FPS, 2.5f) * 1.54f / NOISE_REDUCTION;
-    if (gravity_mod < 1.0f) gravity_mod = 1.0f;
-
+    // 5. Asymmetric EMA + gravity (replaces cava's integral accumulator).
+    //    The integral accumulated input (gain ~4.35x), causing bars to stay
+    //    clamped at 1.0 for hundreds of milliseconds.  This EMA has gain=1.0
+    //    so output never exceeds the input value — provably no lockup.
     bool overshoot = false;
     for (int b = 0; b < BAR_COUNT; b++) {
-        float val = rawBars[b];
+        float raw = rawBars[b];
 
-        // (a) Gravity falloff: compare raw against previous gravity output.
-        //     If falling, use peak*(1 - fall^2*gravity_mod) for smooth drop.
-        //     If rising or equal, set new peak and reset fall velocity.
-        if (val < g_prev[b] && NOISE_REDUCTION > 0.1f) {
-            val = g_peak[b] * (1.0f - g_fall[b] * g_fall[b] * gravity_mod);
-            if (val < 0.0f) val = 0.0f;
-            g_fall[b] += GRAVITY_FALL_INCR;
+        // (a) Asymmetric EMA: fast attack, slow decay (gain = 1.0).
+        //     Attack: 60% new value → ~4 frames to reach 95% of step input.
+        //     Decay:  15% new value → smooth exponential fall, half-life ~4 frames.
+        if (raw > g_mem[b]) {
+            g_mem[b] = g_mem[b] * SMOOTH_ATTACK + raw * (1.0f - SMOOTH_ATTACK);
         } else {
-            g_peak[b] = val;
+            g_mem[b] = g_mem[b] * SMOOTH_DECAY + raw * (1.0f - SMOOTH_DECAY);
+        }
+
+        // (b) Gravity: constant-acceleration fall from peak.
+        //     Gives smooth parabolic descent (~367ms from 1.0 to 0).
+        //     Peak tracks the EMA output upward instantly.
+        if (g_mem[b] >= g_peak[b]) {
+            g_peak[b] = g_mem[b];
             g_fall[b] = 0.0f;
-        }
-        g_prev[b] = val;
-
-        // (b) Integral smoothing: IIR accumulator (cava's integral filter).
-        //     mem = mem * NR + input.  Amplifies sustained signals ~4.3x,
-        //     provides smooth exponential decay when input drops.
-        val = g_mem[b] * NOISE_REDUCTION + val;
-        g_mem[b] = val;
-
-        // Overshoot on post-integral value (cava checks here).
-        if (val > 1.0f) {
-            overshoot = true;
-            val = 1.0f;
+        } else {
+            g_fall[b] += GRAVITY;
+            g_peak[b] -= g_fall[b];
+            if (g_peak[b] < g_mem[b]) g_peak[b] = g_mem[b];
+            if (g_peak[b] < 0.0f) g_peak[b] = 0.0f;
         }
 
-        bars[b] = val;
+        // Overshoot detection for auto-sensitivity.
+        if (g_peak[b] > 1.0f) overshoot = true;
+
+        bars[b] = std::min(g_peak[b], 1.0f);
     }
 
-    // 6. Auto-sensitivity (cava-style):
-    //    overshoot -> reduce (0.98x) and disable sensInit permanently.
-    //    quiet (non-silent) -> slowly grow (1.001x).
-    //    sensInit ramps fast (1.1x) until first overshoot or cap.
+    // 6. Auto-sensitivity:
+    //    Overshoot → fast reduction (0.85x, converges in ~7 frames).
+    //    Non-silent → slow growth (1.002x).
+    //    sensInit → fast ramp (1.1x) until first overshoot or cap.
     if (overshoot) {
         g_sens *= SENS_ATTACK;
         g_sensInit = false;
@@ -248,6 +248,15 @@ static void processFrame(const float* newSamples, float* bars) {
         }
     }
     g_sens = std::max(SENS_MIN, std::min(SENS_MAX, g_sens));
+
+    // Debug: log every 60 frames (1 second) so we can verify data flow
+    if (++g_dbgFrame % 60 == 0) {
+        float maxBar = 0.0f;
+        for (int b = 0; b < BAR_COUNT; b++)
+            if (bars[b] > maxBar) maxBar = bars[b];
+        fprintf(stderr, "[vis-dbg] f=%d sens=%.3f maxBar=%.3f audioMax=%.6f bars[0]=%.3f [35]=%.3f [69]=%.3f\n",
+                g_dbgFrame, g_sens, maxBar, audioMax, bars[0], bars[35], bars[69]);
+    }
 }
 
 #endif // VIS_FFT_H
