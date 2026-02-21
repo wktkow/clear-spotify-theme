@@ -43,7 +43,10 @@ if (-not $spicetifyCmd) {
         # Disable strict mode — the spicetify installer uses uninitialized
         # variables ($v) that blow up under Set-StrictMode -Version Latest.
         Set-StrictMode -Off
-        Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/spicetify/cli/main/install.ps1" | Invoke-Expression
+        $installerContent = (Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/spicetify/cli/main/install.ps1").Content
+        # Auto-accept Spicetify Marketplace installation (choice 0 = Yes)
+        $installerContent = $installerContent -replace '\$choice\s*=\s*\$Host\.UI\.PromptForChoice\([^)]*Marketplace[^)]*\)', '$choice = 0'
+        Invoke-Expression $installerContent
     } catch {
         Write-Host "`n   Failed to install spicetify: $_" -ForegroundColor Red
         Write-Host "   Install it manually: https://spicetify.app" -ForegroundColor Red
