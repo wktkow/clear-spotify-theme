@@ -18,12 +18,18 @@ Opinionated Spotify client reducing screen clutter and improving readability.
 
 ## Installation
 
-> **Version-locked:** Clear pins Spotify to `1.2.74.477.g3be53afe` and Spicetify to `v2.42.11`.
-> The installers will remove any existing Spotify/Spicetify and install these exact versions.
+> **⚠️ Destructive install:** The installer **wipes every existing Spotify and Spicetify installation** on your machine
+> (Desktop, Store, Snap, deb, Flatpak — all of them) and force-installs exact pinned versions:
+>
+> - **Spotify** `1.2.74.477.g3be53afe`
+> - **Spicetify** `v2.42.11`
+>
+> Auto-updates are blocked so the versions never change. This is by design — Clear is tested
+> against these specific builds and nothing else.
 
 ### On Windows:
 
-0. The installer will handle everything — it removes any existing Spotify (Desktop or Store) and Spicetify, then installs the locked versions.
+0. The installer handles everything automatically — it removes any existing Spotify (Desktop or Store) and Spicetify, installs the locked versions, and blocks auto-updates.
 
 1. Open PowerShell and paste:
 
