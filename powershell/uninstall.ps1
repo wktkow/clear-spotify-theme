@@ -2,11 +2,15 @@
 .SYNOPSIS
     Uninstalls the Clear Spotify client mod and restores vanilla Spotify.
 .DESCRIPTION
+    Comprehensive removal of all Clear artifacts:
     - Kills Spotify and vis-capture daemon
+    - Removes ClearVisCapture scheduled task
+    - Removes legacy startup shortcut
     - Restores Spotify to vanilla state via spicetify restore
-    - Removes Clear theme files
+    - Removes Clear theme files from spicetify Themes directory
     - Resets spicetify configuration
-    - Removes vis-capture binary and scheduled task
+    - Removes ClearVis directory (vis-capture binary)
+    - Removes leftover temp build directory
     - Launches clean Spotify
 .NOTES
     Run in PowerShell. Does NOT uninstall spicetify itself — only the Clear mod.
@@ -20,6 +24,12 @@ $themeName = "Clear"
 function Write-Step($msg) { Write-Host "`n>> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "   $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "   $msg" -ForegroundColor Yellow }
+
+function Exit-WithError {
+    Write-Host ""
+    Read-Host "Press Enter to close"
+    exit 1
+}
 
 # ── 1. Kill Spotify and vis-capture ──────────────────────────────────────────
 Write-Step "Stopping running processes"
@@ -36,16 +46,70 @@ if ($spotifyProcs) {
 $visProcs = Get-Process -Name "vis-capture" -ErrorAction SilentlyContinue
 if ($visProcs) {
     $visProcs | Stop-Process -Force
-    Start-Sleep -Seconds 1
+    Start-Sleep -Seconds 2
+    # Verify process actually exited (file may be locked otherwise)
+    $still = Get-Process -Name "vis-capture" -ErrorAction SilentlyContinue
+    if ($still) {
+        Write-Warn "vis-capture still running — waiting longer..."
+        Start-Sleep -Seconds 3
+    }
     Write-Ok "vis-capture stopped"
 } else {
     Write-Ok "vis-capture was not running"
 }
 
-# ── 2. Restore Spotify to vanilla ───────────────────────────────────────────
-Write-Step "Restoring Spotify to vanilla"
+# ── 2. Remove scheduled task and startup entries ─────────────────────────────
+Write-Step "Removing auto-start entries"
+
+$taskName = "ClearVisCapture"
+try {
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Ok "Removed '$taskName' scheduled task"
+    } else {
+        Write-Ok "No '$taskName' scheduled task found"
+    }
+} catch {
+    Write-Warn "Could not check/remove scheduled task: $_"
+}
+
+# Remove legacy startup shortcut if present
+$legacyShortcut = Join-Path ([System.IO.Path]::Combine($env:APPDATA, "Microsoft\Windows\Start Menu\Programs\Startup")) "ClearVis.lnk"
+if (Test-Path $legacyShortcut) {
+    Remove-Item $legacyShortcut -Force
+    Write-Ok "Removed legacy startup shortcut"
+}
+
+# ── 3. Find spicetify ───────────────────────────────────────────────────────
+Write-Step "Locating spicetify"
 
 $spicetifyCmd = Get-Command spicetify -ErrorAction SilentlyContinue
+
+# If not in PATH, try default install location
+if (-not $spicetifyCmd) {
+    $defaultSpicetify = Join-Path $env:LOCALAPPDATA "spicetify\spicetify.exe"
+    if (Test-Path $defaultSpicetify) {
+        $env:PATH = (Split-Path $defaultSpicetify) + ";" + $env:PATH
+        $spicetifyCmd = Get-Command spicetify -ErrorAction SilentlyContinue
+    }
+}
+
+# Also try refreshing PATH from registry
+if (-not $spicetifyCmd) {
+    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $spicetifyCmd = Get-Command spicetify -ErrorAction SilentlyContinue
+}
+
+if ($spicetifyCmd) {
+    Write-Ok "spicetify found at $($spicetifyCmd.Source)"
+} else {
+    Write-Warn "spicetify not found in PATH — will still remove files manually"
+}
+
+# ── 4. Restore Spotify to vanilla ───────────────────────────────────────────
+Write-Step "Restoring Spotify to vanilla"
+
 if ($spicetifyCmd) {
     try {
         & spicetify restore
@@ -54,20 +118,24 @@ if ($spicetifyCmd) {
         Write-Warn "spicetify restore returned non-zero (may already be vanilla)"
     }
 } else {
-    Write-Warn "spicetify not found in PATH — skipping restore"
+    Write-Warn "spicetify not found — skipping restore (Spotify may need reinstall)"
 }
 
-# ── 3. Remove Clear theme files ─────────────────────────────────────────────
+# ── 5. Remove Clear theme files ─────────────────────────────────────────────
 Write-Step "Removing Clear theme files"
 
 $spicetifyDir = $null
-try {
-    $pathOutput = & spicetify path -c 2>$null
-    if ($pathOutput -and (Test-Path (Split-Path $pathOutput))) {
-        $spicetifyDir = Split-Path $pathOutput
-    }
-} catch {}
 
+if ($spicetifyCmd) {
+    try {
+        $pathOutput = & spicetify path -c 2>$null
+        if ($pathOutput -and (Test-Path (Split-Path $pathOutput))) {
+            $spicetifyDir = Split-Path $pathOutput
+        }
+    } catch {}
+}
+
+# Fallback to common locations
 if (-not $spicetifyDir) {
     $candidates = @(
         "$env:APPDATA\spicetify",
@@ -88,45 +156,52 @@ if ($spicetifyDir) {
     }
 
     # Reset spicetify config
-    try { & spicetify config current_theme "" } catch {}
-    try { & spicetify config inject_theme_js 0 } catch {}
-    try { & spicetify config color_scheme "" } catch {}
-    try { & spicetify config extensions "" } catch {}
-    Write-Ok "Reset spicetify configuration"
+    if ($spicetifyCmd) {
+        try { & spicetify config current_theme "" } catch {}
+        try { & spicetify config inject_theme_js 0 } catch {}
+        try { & spicetify config color_scheme "" } catch {}
+        try { & spicetify config extensions "" } catch {}
+        Write-Ok "Reset spicetify configuration"
+    }
 } else {
-    Write-Warn "Could not locate spicetify config directory"
+    Write-Warn "Could not locate spicetify config directory — checking fallback paths"
+    # Try common theme directory locations directly
+    $fallbackDirs = @(
+        "$env:APPDATA\spicetify\Themes\$themeName",
+        "$env:USERPROFILE\.spicetify\Themes\$themeName"
+    )
+    foreach ($fb in $fallbackDirs) {
+        if (Test-Path $fb) {
+            Remove-Item -Recurse -Force $fb
+            Write-Ok "Removed $fb"
+        }
+    }
 }
 
-# ── 4. Remove vis-capture daemon ─────────────────────────────────────────────
-Write-Step "Removing audio visualizer daemon"
+# ── 6. Remove vis-capture daemon files ───────────────────────────────────────
+Write-Step "Removing audio visualizer daemon files"
 
-# Remove scheduled task
-$taskName = "ClearVisCapture"
-$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existingTask) {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    Write-Ok "Removed '$taskName' scheduled task"
-} else {
-    Write-Ok "No scheduled task found"
-}
-
-# Remove binary
+# Primary install location
 $visDir = Join-Path $env:LOCALAPPDATA "ClearVis"
 if (Test-Path $visDir) {
-    Remove-Item -Recurse -Force $visDir
-    Write-Ok "Removed $visDir"
+    try {
+        Remove-Item -Recurse -Force $visDir
+        Write-Ok "Removed $visDir"
+    } catch {
+        Write-Warn "Could not remove $visDir (file may be locked) — try deleting manually"
+    }
 } else {
-    Write-Ok "vis-capture directory already gone"
+    Write-Ok "ClearVis directory already gone"
 }
 
-# Remove legacy startup shortcut if present
-$legacyShortcut = Join-Path ([System.IO.Path]::Combine($env:APPDATA, "Microsoft\Windows\Start Menu\Programs\Startup")) "ClearVis.lnk"
-if (Test-Path $legacyShortcut) {
-    Remove-Item $legacyShortcut -Force
-    Write-Ok "Removed legacy startup shortcut"
+# Clean up temp build dir if leftover from a failed install
+$buildDir = Join-Path $env:TEMP "clearvis-build"
+if (Test-Path $buildDir) {
+    Remove-Item -Recurse -Force $buildDir
+    Write-Ok "Removed leftover build directory"
 }
 
-# ── 5. Launch clean Spotify ──────────────────────────────────────────────────
+# ── 7. Launch clean Spotify ──────────────────────────────────────────────────
 Write-Step "Launching Spotify"
 
 $spotifyExe = $null

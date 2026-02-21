@@ -225,11 +225,26 @@ $visDir = Join-Path $env:LOCALAPPDATA "ClearVis"
 New-Item -ItemType Directory -Force -Path $visDir | Out-Null
 $visBin = Join-Path $visDir "vis-capture.exe"
 
+# Remove old scheduled task first so it can't restart the process
+$taskName = "ClearVisCapture"
+try {
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Ok "Removed old '$taskName' scheduled task"
+    }
+} catch {}
+
 # Kill any existing vis-capture so we can replace the binary and free the port
 $oldProcs = Get-Process -Name "vis-capture" -ErrorAction SilentlyContinue
 if ($oldProcs) {
     $oldProcs | Stop-Process -Force
-    Start-Sleep -Seconds 1
+    Start-Sleep -Seconds 2
+    # Verify process actually exited
+    $still = Get-Process -Name "vis-capture" -ErrorAction SilentlyContinue
+    if ($still) {
+        Start-Sleep -Seconds 3
+    }
     Write-Ok "Stopped existing vis-capture"
 }
 
@@ -300,26 +315,47 @@ if ($nativeOk) {
     }
 
     if ($built -and (Test-Path $visBin)) {
-        # Use Task Scheduler for hidden auto-start (no console window flash)
-        $taskName = "ClearVisCapture"
-        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-        if ($existingTask) {
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        # Set up auto-start — try Task Scheduler first (hidden, no console flash),
+        # fall back to startup shortcut if Task Scheduler fails.
+        $autoStartOk = $false
+        $startupDir = [System.IO.Path]::Combine($env:APPDATA, "Microsoft\Windows\Start Menu\Programs\Startup")
+
+        try {
+            $action  = New-ScheduledTaskAction -Execute $visBin
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+            $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Clear Spotify Visualizer Audio Bridge" | Out-Null
+            Write-Ok "Registered '$taskName' scheduled task (auto-starts on login)"
+            $autoStartOk = $true
+
+            # Remove legacy startup shortcut since we use Task Scheduler now
+            $legacyShortcut = Join-Path $startupDir "ClearVis.lnk"
+            if (Test-Path $legacyShortcut) {
+                Remove-Item $legacyShortcut -Force
+                Write-Ok "Removed legacy startup shortcut"
+            }
+        } catch {
+            Write-Warn "Task Scheduler failed: $_ — falling back to startup shortcut"
         }
 
-        $action  = New-ScheduledTaskAction -Execute $visBin
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Clear Spotify Visualizer Audio Bridge" | Out-Null
-        Write-Ok "Registered '$taskName' scheduled task (auto-starts on login)"
-
-        # Remove legacy startup shortcut if present
-        $legacyShortcut = Join-Path ([System.IO.Path]::Combine($env:APPDATA, "Microsoft\Windows\Start Menu\Programs\Startup")) "ClearVis.lnk"
-        if (Test-Path $legacyShortcut) {
-            Remove-Item $legacyShortcut -Force
-            Write-Ok "Removed legacy startup shortcut"
+        # Fallback: create a startup shortcut if Task Scheduler failed
+        if (-not $autoStartOk) {
+            try {
+                $shortcutPath = Join-Path $startupDir "ClearVis.lnk"
+                $shell = New-Object -ComObject WScript.Shell
+                $shortcut = $shell.CreateShortcut($shortcutPath)
+                $shortcut.TargetPath = $visBin
+                $shortcut.WorkingDirectory = $visDir
+                $shortcut.WindowStyle = 7  # Minimized
+                $shortcut.Description = "Clear Spotify Visualizer Audio Bridge"
+                $shortcut.Save()
+                Write-Ok "Created startup shortcut (auto-starts on login)"
+            } catch {
+                Write-Warn "Could not set up auto-start: $_"
+                Write-Warn "You can run vis-capture.exe manually from: $visDir"
+            }
         }
 
         # Start it right now
@@ -327,9 +363,9 @@ if ($nativeOk) {
         Start-Sleep -Seconds 1
         $running = Get-Process -Name "vis-capture" -ErrorAction SilentlyContinue
         if ($running) {
-            Write-Ok "Audio visualizer daemon is running (auto-starts on login)"
+            Write-Ok "Audio visualizer daemon is running"
         } else {
-            Write-Warn "Daemon registered but may not have started — try running vis-capture.exe manually"
+            Write-Warn "Daemon may not have started — try running vis-capture.exe manually from: $visDir"
         }
     }
 }
