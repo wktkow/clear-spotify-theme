@@ -12,6 +12,10 @@ Opinionated Spotify client reducing screen clutter and improving readability.
 
 [![Embedded Audio Visualizer](https://img.youtube.com/vi/fwry72jtBTE/0.jpg)](https://youtu.be/fwry72jtBTE)
 
+### And it's configurable!
+
+![Visualizer Settings](images/vis-settings.png)
+
 ## Installation
 
 ### On Windows:
